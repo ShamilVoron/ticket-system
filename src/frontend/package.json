@@ -1,0 +1,47 @@
+{
+  "name": "ticket-system-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "predev": "npm run kill:3000",
+    "dev": "nuxt dev",
+    "kill:3001": "fuser -k 3001/tcp 2>/dev/null || true; sleep 1; fuser -k 3001/tcp 2>/dev/null || true",
+    "dev:3001": "npm run kill:3001 && nuxt dev --port 3001 --host 0.0.0.0",
+    "generate": "nuxt generate",
+    "prepreview": "npm run kill:3000",
+    "preview": "nuxt preview",
+    "prestart": "npm run kill:3000",
+    "start": "NODE_ENV=production HOST=0.0.0.0 PORT=3000 node .output/server/index.mjs",
+    "prod": "npm run kill:3000 && npm run build && NODE_ENV=production HOST=0.0.0.0 PORT=3000 node .output/server/index.mjs",
+    "kill:3000": "fuser -k 3000/tcp 2>/dev/null || true; sleep 1; fuser -k 3000/tcp 2>/dev/null || true",
+    "clean": "rm -rf .nuxt .output",
+    "postinstall": "nuxt prepare",
+    "lint": "eslint . --ext .ts,.vue",
+    "lint:fix": "eslint . --ext .ts,.vue --fix",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@microsoft/signalr": "^8.0.0",
+    "@pinia/nuxt": "^0.5.1",
+    "lucide-vue-next": "^1.0.0",
+    "nuxt": "^3.11.0",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@nuxtjs/tailwindcss": "^6.11.0",
+    "@tailwindcss/forms": "^0.5.11",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-vue": "^9.33.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

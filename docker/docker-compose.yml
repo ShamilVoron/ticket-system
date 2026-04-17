@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: tickets-postgres
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change_me}
+      POSTGRES_DB: tickets_db
+    ports:
+      - "5444:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - tickets-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: tickets-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - tickets-net
+
+  mongodb:
+    image: mongo:6
+    container_name: tickets-mongo
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - tickets-net
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: tickets-rabbitmq
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    networks:
+      - tickets-net
+
+  backend:
+    build:
+      context: ../src/backend
+      dockerfile: Dockerfile
+    container_name: tickets-backend
+    ports:
+      # Kestrel в образе слушает :5000 (см. appsettings.Production.json), не :8080
+      - "5000:5000"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Из контейнера localhost ≠ хост; имена сервисов и внутренние порты сети compose
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=tickets_db;Username=app;Password=${DB_PASSWORD:-change_me}
+      ConnectionStrings__MongoConnection: mongodb://mongodb:27017
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: ${RABBITMQ_USERNAME:-change_me}
+      RabbitMQ__Password: ${RABBITMQ_PASSWORD:-change_me}
+      DB_PASSWORD: ${DB_PASSWORD:-change_me}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-change_me}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-change_me}
+      JWT_SECRET: ${JWT_SECRET:?JWT secret is required}
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-admin@example.com}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-change_me}
+      SUPERADMIN_FULLNAME: ${SUPERADMIN_FULLNAME:-Super Admin}
+      SUPERADMIN_USERID: ${SUPERADMIN_USERID:-super-admin}
+    depends_on:
+      - postgres
+      - mongodb
+      - rabbitmq
+      - redis
+    networks:
+      - tickets-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ../src/frontend
+      dockerfile: Dockerfile
+    container_name: tickets-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Пусто: браузер ходит на тот же хост :3000, Nitro проксирует /api. Иначе localhost — чужой ПК при открытии по IP.
+      NUXT_PUBLIC_API_BASE_URL: ""
+    depends_on:
+      - backend
+    networks:
+      - tickets-net
+
+volumes:
+  postgres_data:
+    external: true
+    name: tickets_postgres_data
+  mongo_data:
+
+networks:
+  tickets-net:
+    driver: bridge

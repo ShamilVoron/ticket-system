@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Ticket System — единая точка для Docker Compose (v2 или legacy v1).
+# Старый docker-compose 1.29 + новый Docker Engine даёт KeyError 'ContainerConfig'
+# при recreate; перед up удаляем целевые контейнеры.
+#
+# Использование (из любой директории):
+#   ./docker/stack install-plugin   # один раз: поставить docker compose v2 (sudo)
+#   ./docker/stack up               # весь стек -d
+#   ./docker/stack rebuild-backend  # сборка API + безопасный перезапуск
+#   ./docker/stack rebuild-frontend
+#   ./docker/stack rebuild-all
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE_FILE="$DIR/docker-compose.yml"
+cd "$DIR"
+
+is_compose_v2() {
+  docker compose version &>/dev/null
+}
+
+compose() {
+  if is_compose_v2; then
+    docker compose -f "$COMPOSE_FILE" "$@"
+  else
+    docker-compose -f "$COMPOSE_FILE" "$@"
+  fi
+}
+
+# Аргументы после "up -d" — имена сервисов (без флагов).
+legacy_rm_before_up() {
+  is_compose_v2 && return 0
+  local args=("$@")
+  local rm_backend=false
+  local rm_frontend=false
+
+  if [[ ${#args[@]} -eq 0 ]]; then
+    rm_backend=true
+    rm_frontend=true
+  else
+    for a in "${args[@]}"; do
+      [[ "$a" == -* ]] && continue
+      [[ "$a" == backend ]] && rm_backend=true
+      [[ "$a" == frontend ]] && rm_frontend=true
+    done
+  fi
+
+  # Имя может быть с префиксом проекта (…_tickets-backend); rm по точному имени не снимает контейнер → ContainerConfig.
+  if $rm_backend; then
+    docker ps -aq --filter name=tickets-backend | xargs -r docker rm -f 2>/dev/null || true
+  fi
+  if $rm_frontend; then
+    docker ps -aq --filter name=tickets-frontend | xargs -r docker rm -f 2>/dev/null || true
+  fi
+}
+
+usage() {
+  echo "Usage: $0 {install-plugin|up|down|ps|logs|build|rebuild-backend|rebuild-frontend|rebuild-all} [extra compose args...]" >&2
+  exit 1
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  install-plugin)
+    if ! command -v apt-get &>/dev/null; then
+      echo "apt-get не найден. Установите Docker Compose V2 вручную: https://docs.docker.com/compose/install/linux/" >&2
+      exit 1
+    fi
+    sudo apt-get update -qq
+    sudo apt-get install -y docker-compose-plugin
+    docker compose version
+    ;;
+  up)
+    legacy_rm_before_up "$@"
+    compose up -d "$@"
+    ;;
+  down)
+    compose down "$@"
+    ;;
+  ps)
+    compose ps "$@"
+    ;;
+  logs)
+    compose logs "$@"
+    ;;
+  build)
+    compose build "$@"
+    ;;
+  rebuild-backend)
+    compose build --no-cache backend
+    docker ps -aq --filter name=tickets-backend | xargs -r docker rm -f 2>/dev/null || true
+    if ! is_compose_v2; then
+      : # контейнер уже снят
+    fi
+    compose up -d backend
+    ;;
+  rebuild-frontend)
+    compose build --no-cache frontend
+    docker ps -aq --filter name=tickets-frontend | xargs -r docker rm -f 2>/dev/null || true
+    compose up -d frontend
+    ;;
+  rebuild-all)
+    compose build --no-cache backend frontend
+    docker ps -aq --filter name=tickets-backend | xargs -r docker rm -f 2>/dev/null || true
+    docker ps -aq --filter name=tickets-frontend | xargs -r docker rm -f 2>/dev/null || true
+    compose up -d backend frontend
+    ;;
+  "")
+    usage
+    ;;
+  *)
+    # Прокси: ./stack exec backend sh и т.д.
+    compose "$cmd" "$@"
+    ;;
+esac
