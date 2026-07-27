@@ -3,6 +3,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+# Nitro/Vite proxy target for container networking (override in compose)
+ARG NUXT_DEV_BACKEND_URL=http://backend:5000
+ENV NUXT_DEV_BACKEND_URL=$NUXT_DEV_BACKEND_URL
 RUN npm run build
 
 FROM node:20-alpine AS runtime

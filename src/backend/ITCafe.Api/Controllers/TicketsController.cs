@@ -15,11 +15,13 @@ public class TicketsController : ControllerBase
 {
     private readonly ITicketService _ticketService;
     private readonly ISlaService _slaService;
+    private readonly ITicketAssistService _ticketAssist;
 
-    public TicketsController(ITicketService ticketService, ISlaService slaService)
+    public TicketsController(ITicketService ticketService, ISlaService slaService, ITicketAssistService ticketAssist)
     {
         _ticketService = ticketService;
         _slaService = slaService;
+        _ticketAssist = ticketAssist;
     }
 
     private string CurrentUserId() =>
@@ -59,6 +61,13 @@ public class TicketsController : ControllerBase
     {
         var stats = await _ticketService.GetTicketStatsAsync();
         return Ok(stats);
+    }
+
+    /// <summary>Подсказывает тип обращения / приоритет / отдел по ключевым словам.</summary>
+    [HttpPost("suggest-fields")]
+    public ActionResult<SuggestFieldsResponse> SuggestFields([FromBody] SuggestFieldsRequest request)
+    {
+        return Ok(_ticketAssist.SuggestFields(request ?? new SuggestFieldsRequest(null, null)));
     }
 
     /// <summary>Возвращает заявку по идентификатору.</summary>
@@ -181,6 +190,40 @@ public class TicketsController : ControllerBase
         {
             var report = await _ticketService.UpdateFieldReportAsync(id, reportId, request);
             return Ok(report);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
+    /// <summary>Возвращает единую ленту событий заявки (создание, комментарии, акты).</summary>
+    [HttpGet("{id:int}/timeline")]
+    public async Task<ActionResult<IEnumerable<TimelineItemDto>>> GetTimeline(int id)
+    {
+        try
+        {
+            var items = await _ticketService.GetTimelineAsync(id);
+            return Ok(items);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    /// <summary>Черновик ответа: локальный поиск по БЗ/похожим заявкам или OpenAI (если ai_provider=openai).</summary>
+    [HttpPost("{id:int}/suggest-reply")]
+    public async Task<ActionResult<SuggestReplyResponse>> SuggestReply(int id)
+    {
+        try
+        {
+            var result = await _ticketAssist.SuggestReplyAsync(id);
+            return Ok(result);
         }
         catch (KeyNotFoundException)
         {

@@ -16,11 +16,40 @@ export type TicketSyncPayload = {
   recipientUserIds?: string[] | null
 }
 
+export type TicketSignalRConnectionState =
+  | 'Disconnected'
+  | 'Connecting'
+  | 'Connected'
+  | 'Reconnecting'
+
 type SyncCallback = (payload: TicketSyncPayload) => void
 
 let connection: HubConnection | null = null
 let callbacks: Set<SyncCallback> = new Set()
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Shared reactive connection state for layout banner / diagnostics. */
+const connectionState = ref<TicketSignalRConnectionState>('Disconnected')
+
+function syncConnectionState() {
+  if (!connection) {
+    connectionState.value = 'Disconnected'
+    return
+  }
+  switch (connection.state) {
+    case HubConnectionState.Connected:
+      connectionState.value = 'Connected'
+      break
+    case HubConnectionState.Connecting:
+      connectionState.value = 'Connecting'
+      break
+    case HubConnectionState.Reconnecting:
+      connectionState.value = 'Reconnecting'
+      break
+    default:
+      connectionState.value = 'Disconnected'
+  }
+}
 
 function getHubUrl(): string {
   const config = useRuntimeConfig()
@@ -83,18 +112,29 @@ function ensureConnection() {
     })
   })
 
+  connection.onreconnecting(() => {
+    connectionState.value = 'Reconnecting'
+  })
+  connection.onreconnected(() => {
+    connectionState.value = 'Connected'
+  })
   connection.onclose(() => {
+    connectionState.value = 'Disconnected'
     scheduleReconnect()
   })
 
+  connectionState.value = 'Connecting'
   startConnection()
 }
 
 async function startConnection() {
   if (!connection || connection.state !== HubConnectionState.Disconnected) return
+  connectionState.value = 'Connecting'
   try {
     await connection.start()
+    syncConnectionState()
   } catch {
+    connectionState.value = 'Disconnected'
     scheduleReconnect()
   }
 }
@@ -107,18 +147,35 @@ function scheduleReconnect() {
   }, 5000)
 }
 
-/** Колбэк при любом TicketSync; в payload — ticketId и детали для уведомлений. */
-export function useTicketSignalR(callback: SyncCallback) {
-  ensureConnection()
-  callbacks.add(callback)
+/** True when the shared TicketSync hub is connected (or connecting). */
+export function isTicketSignalRConnected(): boolean {
+  if (!connection) return false
+  const s = connection.state
+  return s === HubConnectionState.Connected || s === HubConnectionState.Connecting || s === HubConnectionState.Reconnecting
+}
 
-  onUnmounted(() => {
-    callbacks.delete(callback)
-    if (callbacks.size === 0 && connection) {
-      connection.stop()
-      connection = null
-    }
-  })
+/**
+ * Подписка на TicketSync. Возвращает реактивный connectionState для баннера офлайна.
+ * callback опционален — layout может вызывать только ради состояния.
+ */
+export function useTicketSignalR(callback?: SyncCallback) {
+  ensureConnection()
+  if (callback) {
+    callbacks.add(callback)
+    onUnmounted(() => {
+      callbacks.delete(callback)
+      if (callbacks.size === 0 && connection) {
+        connection.stop()
+        connection = null
+        connectionState.value = 'Disconnected'
+      }
+    })
+  }
+
+  return {
+    connectionState: readonly(connectionState),
+    isConnected: computed(() => connectionState.value === 'Connected'),
+  }
 }
 
 /** Только id заявки (удобно для обновления списков). */

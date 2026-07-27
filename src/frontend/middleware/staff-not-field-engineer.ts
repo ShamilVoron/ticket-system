@@ -10,6 +10,6 @@ export default defineNuxtRouteMiddleware(() => {
     return navigateTo('/')
   }
   if (auth.isFieldEngineer) {
-    return navigateTo('/')
+    return navigateTo('/field')
   }
 })

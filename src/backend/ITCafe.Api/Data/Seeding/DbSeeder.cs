@@ -20,6 +20,20 @@ public static class DbSeeder
             await db.Database.EnsureCreatedAsync();
         }
 
+        // Seed default organization (single-tenant Phase Beta)
+        if (!db.Organizations.Any())
+        {
+            db.Organizations.Add(new Organization
+            {
+                Id = 1,
+                Name = "Default",
+                Slug = "default",
+                CreatedAtUtc = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+            logger.LogInformation("Seeded default Organization Id=1.");
+        }
+
         // Seed default SLA policies if none exist
         if (!db.SlaPolicies.Any())
         {
@@ -159,6 +173,17 @@ public static class DbSeeder
             if (string.IsNullOrWhiteSpace(src)) continue;
             var at = src.IndexOf('@');
             emp.Login = at > 0 ? src[..at].Trim() : src.Trim();
+        }
+
+        if (!db.SystemSettings.Any(s => s.Key == "ai_provider"))
+        {
+            db.SystemSettings.Add(new SystemSetting
+            {
+                Key = "ai_provider",
+                Value = "none",
+                UpdatedAt = DateTime.UtcNow,
+            });
+            logger.LogInformation("Seeded default ai_provider=none.");
         }
 
         // Временный режим: все не-клиенты → super_admin (JWT и [Authorize(Roles=…)]).

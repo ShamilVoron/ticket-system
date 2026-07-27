@@ -7,6 +7,7 @@ public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
+    public DbSet<Organization> Organizations => Set<Organization>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<Company> Companies => Set<Company>();
@@ -28,10 +29,20 @@ public class AppDbContext : DbContext
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<UserTicketReadState> UserTicketReadStates => Set<UserTicketReadState>();
     public DbSet<UserChatReadState> UserChatReadStates => Set<UserChatReadState>();
+    public DbSet<AutomationRule> AutomationRules => Set<AutomationRule>();
+    public DbSet<KbCategory> KbCategories => Set<KbCategory>();
+    public DbSet<KbArticle> KbArticles => Set<KbArticle>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<Organization>(entity =>
+        {
+            entity.Property(e => e.Name).HasMaxLength(200);
+            entity.Property(e => e.Slug).HasMaxLength(100);
+            entity.HasIndex(e => e.Slug);
+        });
 
         modelBuilder.Entity<Ticket>(entity =>
         {
@@ -40,6 +51,7 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.OkdeskId);
             entity.HasIndex(e => new { e.IsRepair, e.CreatedAt });
             entity.HasIndex(e => e.ClientId);
+            entity.HasIndex(e => e.OrganizationId);
         });
 
         modelBuilder.Entity<Company>(entity =>
@@ -47,6 +59,7 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.Name);
             entity.HasIndex(e => e.ExternalCode);
             entity.HasIndex(e => e.OkdeskId);
+            entity.HasIndex(e => e.OrganizationId);
         });
 
         modelBuilder.Entity<ServiceObject>(entity =>
@@ -61,12 +74,14 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.UserId).IsUnique();
             entity.HasIndex(e => e.Login);
             entity.HasIndex(e => e.OkdeskId);
+            entity.HasIndex(e => e.OrganizationId);
         });
 
         modelBuilder.Entity<UserAccount>(entity =>
         {
             entity.HasIndex(e => e.Email).IsUnique();
             entity.HasIndex(e => e.UserId).IsUnique();
+            entity.HasIndex(e => e.OrganizationId);
         });
 
         modelBuilder.Entity<Client>(entity =>
@@ -79,6 +94,7 @@ public class AppDbContext : DbContext
         {
             entity.HasIndex(e => e.TicketId);
             entity.HasIndex(e => e.OkdeskId);
+            entity.HasIndex(e => e.EmailMessageId);
         });
 
         modelBuilder.Entity<TicketAttachment>(entity =>
@@ -129,6 +145,10 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ChatConversation>(entity =>
         {
             entity.HasIndex(e => e.LastMessageAtUtc);
+            entity.HasIndex(e => e.TicketId);
+            entity.HasIndex(e => e.DepartmentSlug);
+            entity.HasIndex(e => e.OrganizationId);
+            entity.Property(e => e.DepartmentSlug).HasMaxLength(64);
         });
 
         modelBuilder.Entity<ChatMember>(entity =>
@@ -164,6 +184,32 @@ public class AppDbContext : DbContext
         {
             entity.HasIndex(e => new { e.UserId, e.ConversationId }).IsUnique();
             entity.HasIndex(e => e.ConversationId);
+        });
+
+        modelBuilder.Entity<AutomationRule>(entity =>
+        {
+            entity.HasIndex(e => e.IsActive);
+            entity.HasIndex(e => e.Trigger);
+            entity.Property(e => e.Name).HasMaxLength(200);
+            entity.Property(e => e.Trigger).HasMaxLength(64);
+        });
+
+        modelBuilder.Entity<KbCategory>(entity =>
+        {
+            entity.HasIndex(e => e.SortOrder);
+            entity.Property(e => e.Name).HasMaxLength(200);
+        });
+
+        modelBuilder.Entity<KbArticle>(entity =>
+        {
+            entity.HasIndex(e => e.IsPublished);
+            entity.HasIndex(e => e.CategoryId);
+            entity.Property(e => e.Title).HasMaxLength(400);
+            entity.Property(e => e.Tags).HasMaxLength(500);
+            entity.HasOne(e => e.Category)
+                .WithMany()
+                .HasForeignKey(e => e.CategoryId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

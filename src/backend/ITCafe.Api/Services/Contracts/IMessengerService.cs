@@ -48,4 +48,10 @@ public interface IMessengerService
         string? title,
         IReadOnlyList<string>? addMemberUserIds,
         IReadOnlyList<string>? removeMemberUserIds);
+
+    Task<Guid> EnsureDepartmentChannelAsync(string departmentSlug, string currentUserId);
+
+    Task<Guid> EnsureTicketChatAsync(int ticketId, string currentUserId);
+
+    Task<IReadOnlyList<ChatMessageSearchResultDto>> SearchMessagesAsync(string currentUserId, string q);
 }

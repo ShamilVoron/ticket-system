@@ -9,5 +9,7 @@ public interface ITelegramNotificationService
     Task NotifyFieldReportAddedAsync(Ticket ticket, FieldReport report);
     Task NotifySubtaskCreatedAsync(Ticket ticket, TicketSubtask subtask);
     Task NotifyAssigneeChangedAsync(Ticket ticket, string? oldAssigneeUserId = null);
+    /// <summary>Send Telegram for a custom event type (e.g. sla_80, sla_breach, automation).</summary>
+    Task NotifyEventAsync(Ticket ticket, string eventType, Dictionary<string, string>? extra = null);
     Task<bool> TestTokenAsync(string token);
 }

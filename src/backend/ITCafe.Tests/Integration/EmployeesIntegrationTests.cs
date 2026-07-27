@@ -72,18 +72,26 @@ public class EmployeesIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task CreateAccount_ShouldCreateEmployee_WhenValidRequest()
     {
-        var request = new CreateEmployeeAccountDto("New Employee", "Password123", "support_l1", "newemp", "newemp@example.com", "IT");
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var email = $"newemp-{suffix}@example.com";
+        var request = new CreateEmployeeAccountDto("New Employee", "Password123", "support_l1", $"newemp{suffix}", email, "IT");
         var response = await _client.PostAsJsonAsync("/api/Employees/create-account", request);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var result = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
         Assert.NotNull(result);
-        Assert.Equal("newemp@example.com", result!["email"].ToString());
+        Assert.Equal(email, result!["email"].ToString());
     }
 
     [Fact]
     public async Task CreateAccount_ShouldReturnBadRequest_WhenInvalidRole()
     {
-        var request = new CreateEmployeeAccountDto("New Employee", "Password123", "invalid_role", "bademp", "bademp@example.com");
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var request = new CreateEmployeeAccountDto(
+            "New Employee",
+            "Password123",
+            "invalid_role",
+            $"bademp{suffix}",
+            $"bademp-{suffix}@example.com");
         var response = await _client.PostAsJsonAsync("/api/Employees/create-account", request);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

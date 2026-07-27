@@ -27,6 +27,9 @@ const notifEnabled = browserNotif.enabled
 const notifPermission = browserNotif.permission
 const notifSecureContext = browserNotif.secureContext
 const messengerUnreadTotal = useState('messengerUnread', () => 0)
+const { branding, load: loadBranding } = useSystemBranding()
+const brandLogoSrc = computed(() => branding.value.logoUrl || '/favicon.svg')
+const brandTitle = computed(() => branding.value.companyName || 'Ticket System')
 
 const bellTitle = computed(() => {
   if (!notifSecureContext.value) {
@@ -159,7 +162,7 @@ onChatMessage((msg) => {
   })
 })
 
-useTicketSignalR((payload) => {
+const { connectionState: ticketHubState } = useTicketSignalR((payload) => {
   const actor = payload.actorUserId ?? ''
   if (actor && actor === auth.userId) return
 
@@ -188,6 +191,10 @@ useTicketSignalR((payload) => {
   })
 })
 
+const showOfflineBanner = computed(() =>
+  ticketHubState.value === 'Disconnected' || ticketHubState.value === 'Reconnecting'
+)
+
 const toastIcon: Record<string, any> = {
   success: CheckCircle,
   error: AlertCircle,
@@ -196,13 +203,23 @@ const toastIcon: Record<string, any> = {
 }
 const sidebarOpen = ref(false)
 const openGroups = ref<Record<string, boolean>>({
-  clients: true,
-  equipment: true,
+  clients: false,
+  equipment: false,
 })
+
+watch(
+  () => route.path,
+  (p) => {
+    openGroups.value.clients = p.startsWith('/companies') || p.startsWith('/objects')
+    openGroups.value.equipment = p.startsWith('/equipment')
+  },
+  { immediate: true },
+)
 
 const mobileNavItems = computed(() => {
   const items = [
-    { to: '/', label: 'Заявки', icon: Ticket, show: can('sidebarAllTickets') },
+    { to: '/portal', label: 'Портал', icon: LayoutDashboard, show: auth.isClient },
+    { to: '/', label: 'Заявки', icon: Ticket, show: !auth.isClient && can('sidebarAllTickets') },
     { to: '/my', label: 'Мои', icon: LayoutDashboard, show: auth.isStaff && can('sidebarMyTickets') },
     { to: '/messenger', label: 'Чат', icon: MessageSquare, show: auth.isStaff && can('sidebarMessenger') },
     {
@@ -267,6 +284,7 @@ watch(() => route.path, () => {
 onMounted(() => {
   theme.init()
   auth.hydrate()
+  void loadBranding()
   void loadMessengerUnread()
   // Try to load login for dropdown (if allowed)
   if (auth.userId) {
@@ -285,7 +303,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen flex bg-[#F8F9FA] dark:bg-[#0f0f10] text-[13px] dark:text-gray-200">
+  <div class="min-h-screen flex bg-[#F8F9FA] dark:bg-[#0f0f10] text-[13px] dark:text-gray-200" :style="branding.accentColor ? { '--brand-accent': branding.accentColor } : undefined">
     <!-- Mobile overlay -->
     <Transition name="fade">
       <div
@@ -298,27 +316,27 @@ onMounted(() => {
     <!-- Sidebar -->
     <aside
       :class="[
-        'fixed lg:sticky top-0 left-0 z-50 h-screen w-[260px] flex flex-col bg-[#0A0A0B] border-r border-[#1F1F22] transition-transform duration-300 shrink-0',
+        'fixed lg:sticky top-0 left-0 z-50 h-screen w-[260px] flex flex-col bg-white dark:bg-[#0A0A0B] border-r border-zinc-200 dark:border-[#1F1F22] transition-transform duration-300 shrink-0',
         sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
       ]"
     >
       <!-- Брендинг -->
       <NuxtLink
-        to="/"
-        class="h-14 px-5 w-full flex items-center gap-3 border-b border-[#1F1F22]/60 shrink-0 hover:bg-white/[0.06] transition-colors"
+        :to="auth.isClient ? '/portal' : '/'"
+        class="h-14 px-5 w-full flex items-center gap-3 border-b border-zinc-200/80 dark:border-[#1F1F22]/60 shrink-0 hover:bg-zinc-50 dark:hover:bg-white/[0.06] transition-colors"
       >
-        <img src="/favicon.svg" alt="" class="w-7 h-7 rounded-md shrink-0" />
-        <h1 class="font-semibold text-[14px] text-white tracking-wide">Ticket System</h1>
+        <img :src="brandLogoSrc" alt="" class="w-7 h-7 rounded-md shrink-0 object-cover" />
+        <h1 class="font-semibold text-[14px] text-zinc-900 dark:text-white tracking-wide truncate">{{ brandTitle }}</h1>
       </NuxtLink>
 
       <!-- Create Ticket Button -->
       <div
         v-if="can('sidebarNewTicket') && can('newTicketVisible')"
-        class="px-4 py-4 shrink-0 border-b border-[#1F1F22]/40"
+        class="px-4 py-4 shrink-0 border-b border-zinc-200/80 dark:border-[#1F1F22]/40"
       >
         <button 
           @click="createTicket"
-          class="w-full inline-flex items-center justify-center gap-2 bg-[#0A0A0B] hover:bg-zinc-800 text-white px-4 py-2.5 rounded-md text-[13px] font-medium transition-colors border border-white/10"
+          class="w-full inline-flex items-center justify-center gap-2 bg-zinc-900 hover:bg-zinc-800 dark:bg-[#0A0A0B] dark:hover:bg-zinc-800 text-white px-4 py-2.5 rounded-md text-[13px] font-medium transition-colors border border-zinc-800 dark:border-white/10"
         >
           <Plus :size="16" />
           Новая заявка
@@ -327,12 +345,22 @@ onMounted(() => {
 
       <!-- Navigation -->
       <nav class="flex-1 overflow-y-auto py-4 flex flex-col gap-0.5 px-3">
-        <p class="px-3 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1 mt-2">Основное</p>
+        <p class="px-3 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1 mt-2">Основное</p>
 
         <NuxtLink
-          v-if="can('sidebarAllTickets')"
+          v-if="auth.isClient"
+          to="/portal"
+          class="nav-link"
+          :class="route.path.startsWith('/portal') ? 'active-link' : ''"
+        >
+          <LayoutDashboard class="w-4 h-4" />
+          <span>Портал</span>
+        </NuxtLink>
+
+        <NuxtLink
+          v-if="!auth.isClient && can('sidebarAllTickets')"
           to="/"
-          class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+          class="nav-link"
           :class="route.path === '/' ? 'active-link' : ''"
         >
           <Ticket class="w-4 h-4" />
@@ -342,7 +370,7 @@ onMounted(() => {
         <NuxtLink
           v-if="auth.isStaff && can('sidebarMyTickets')"
           to="/my"
-          class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+          class="nav-link"
           :class="route.path.startsWith('/my') ? 'active-link' : ''"
         >
           <LayoutDashboard class="w-4 h-4" />
@@ -352,7 +380,7 @@ onMounted(() => {
         <NuxtLink
           v-if="auth.isStaff && can('sidebarMessenger')"
           to="/messenger"
-          class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+          class="nav-link"
           :class="route.path.startsWith('/messenger') ? 'active-link' : ''"
         >
           <MessageSquare class="w-4 h-4" />
@@ -365,13 +393,13 @@ onMounted(() => {
           </span>
         </NuxtLink>
 
-        <p class="px-3 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1 mt-5">Справочники</p>
+        <p class="px-3 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1 mt-5">Справочники</p>
 
         <!-- Клиенты (админы + выездные инженеры) -->
         <div v-if="can('sidebarClients')">
           <button
             type="button"
-            class="w-full flex items-center justify-between px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+            class="nav-link justify-between"
             @click="toggleGroup('clients')"
           >
             <div class="flex items-center gap-3">
@@ -380,9 +408,9 @@ onMounted(() => {
             </div>
             <ChevronDown class="w-3.5 h-3.5 nav-arrow" :class="openGroups.clients ? 'open' : ''" />
           </button>
-          <div class="submenu pl-9 flex flex-col gap-0.5 mt-0.5" :class="openGroups.clients ? 'open' : ''">
-            <NuxtLink to="/companies" class="w-full text-left py-1.5 px-2 text-zinc-500 hover:text-zinc-200 rounded-md hover:bg-white/5 transition-colors">Юрлица</NuxtLink>
-            <NuxtLink to="/objects" class="w-full text-left py-1.5 px-2 text-zinc-500 hover:text-zinc-200 rounded-md hover:bg-white/5 transition-colors">Объекты</NuxtLink>
+          <div v-show="openGroups.clients" class="pl-9 flex flex-col gap-0.5 mt-0.5">
+            <NuxtLink to="/companies" class="nav-sublink">Юрлица</NuxtLink>
+            <NuxtLink to="/objects" class="nav-sublink">Объекты</NuxtLink>
           </div>
         </div>
 
@@ -390,7 +418,7 @@ onMounted(() => {
         <div v-if="can('sidebarEquipment')">
           <button
             type="button"
-            class="w-full flex items-center justify-between px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+            class="nav-link justify-between"
             @click="toggleGroup('equipment')"
           >
             <div class="flex items-center gap-3">
@@ -399,8 +427,8 @@ onMounted(() => {
             </div>
             <ChevronDown class="w-3.5 h-3.5 nav-arrow" :class="openGroups.equipment ? 'open' : ''" />
           </button>
-          <div class="submenu pl-9 flex flex-col gap-0.5 mt-0.5" :class="openGroups.equipment ? 'open' : ''">
-            <NuxtLink to="/equipment" class="w-full text-left py-1.5 px-2 text-zinc-500 hover:text-zinc-200 rounded-md hover:bg-white/5 transition-colors">Реестр</NuxtLink>
+          <div v-show="openGroups.equipment" class="pl-9 flex flex-col gap-0.5 mt-0.5">
+            <NuxtLink to="/equipment" class="nav-sublink">Реестр</NuxtLink>
           </div>
         </div>
 
@@ -408,7 +436,7 @@ onMounted(() => {
         <div v-if="auth.isStaff && can('sidebarEmployees')">
           <NuxtLink
             to="/employees"
-            class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+            class="nav-link"
             :class="route.path.startsWith('/employees') ? 'active-link' : ''"
           >
             <Users class="w-4 h-4" />
@@ -420,19 +448,19 @@ onMounted(() => {
         <NuxtLink
           v-if="auth.isStaff && can('sidebarSchedule')"
           to="/schedule"
-          class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+          class="nav-link"
           :class="route.path.startsWith('/schedule') ? 'active-link' : ''"
         >
           <CalendarDays class="w-4 h-4" />
           <span>График работы</span>
         </NuxtLink>
 
-        <p class="px-3 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1 mt-5">Аналитика и Файлы</p>
+        <p class="px-3 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1 mt-5">Аналитика и Файлы</p>
 
         <NuxtLink
           v-if="auth.isStaff && can('sidebarReports')"
           to="/reports"
-          class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+          class="nav-link"
           :class="route.path.startsWith('/reports') ? 'active-link' : ''"
         >
           <BarChart3 class="w-4 h-4" />
@@ -442,19 +470,19 @@ onMounted(() => {
         <NuxtLink
           v-if="auth.isStaff && can('sidebarSpreadsheets')"
           to="/spreadsheets"
-          class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+          class="nav-link"
           :class="route.path.startsWith('/spreadsheets') ? 'active-link' : ''"
         >
           <FileSpreadsheet class="w-4 h-4" />
           <span>Таблички Excel</span>
         </NuxtLink>
 
-        <p class="px-3 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1 mt-5">Система</p>
+        <p class="px-3 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1 mt-5">Система</p>
 
         <NuxtLink
           v-if="can('sidebarSettings')"
           to="/settings"
-          class="w-full flex items-center gap-3 px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 rounded-md transition-all"
+          class="nav-link"
           :class="route.path.startsWith('/settings') ? 'active-link' : ''"
         >
           <Settings class="w-4 h-4" />
@@ -467,6 +495,13 @@ onMounted(() => {
 
     <!-- Main Content -->
     <div class="flex-1 min-w-0 flex flex-col">
+      <div
+        v-if="showOfflineBanner"
+        class="shrink-0 px-3 sm:px-6 py-1.5 text-center text-[11px] sm:text-xs font-medium tracking-wide text-amber-900 dark:text-amber-100 bg-amber-100/95 dark:bg-amber-950/80 border-b border-amber-200/80 dark:border-amber-800/60"
+        role="status"
+      >
+        Нет связи — обновления могут задержаться
+      </div>
       <!-- Top Bar -->
       <header class="h-14 bg-white dark:bg-[#1a1a1d] border-b border-zinc-200/80 dark:border-zinc-800 px-3 sm:px-6 flex items-center justify-between shrink-0 sticky top-0 z-30">
         <div class="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -525,10 +560,6 @@ onMounted(() => {
             >
               <span class="text-[12px] sm:text-[13px] font-semibold text-zinc-800 dark:text-gray-200 truncate">
                 {{ auth.fullName || 'Пользователь' }}
-              </span>
-              <span class="hidden sm:inline text-[12px] text-zinc-400">·</span>
-              <span class="hidden sm:inline text-[12px] text-zinc-500 dark:text-zinc-400 font-medium truncate">
-                {{ auth.roleLabel }}
               </span>
               <span class="text-zinc-400 dark:text-zinc-500 text-xs">▼</span>
             </button>
@@ -683,28 +714,11 @@ onMounted(() => {
 .dropdown-enter-active, .dropdown-leave-active { transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
 .dropdown-enter-from, .dropdown-leave-to { opacity: 0; transform: translateY(-10px) scale(0.95); }
 
-.submenu {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.submenu.open {
-  max-height: 400px;
-}
 .nav-arrow {
   transition: transform 0.2s ease;
 }
 .nav-arrow.open {
   transform: rotate(180deg);
-}
-
-.active-link {
-  background-color: rgba(255, 255, 255, 0.08) !important;
-  color: #F9FAFB !important;
-  font-weight: 500;
-}
-.active-link :deep(svg) {
-  color: #F9FAFB !important;
 }
 
 .safe-bottom {

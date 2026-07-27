@@ -6,7 +6,7 @@ import {
   RefreshCw, ListChecks, Link as LinkIcon, Download,
   ExternalLink, Copy, HelpCircle, Info, Hash, Briefcase, Plus, ChevronRight,
 } from 'lucide-vue-next'
-import type { Ticket, Comment, FieldReport, Subtask, Attachment, SystemStatus, EmployeeOption } from '~/types'
+import type { Ticket, Comment, FieldReport, Subtask, Attachment, SystemStatus, EmployeeOption, TimelineItem } from '~/types'
 import MessageReactions from '~/components/MessageReactions.vue'
 import { resolvePublicApiBaseUrl } from '~/utils/resolvePublicApiBaseUrl'
 
@@ -28,7 +28,9 @@ const isMyTicket = computed(() => {
   return ticket.value.assignee === auth.fullName || (ticket.value.assignees || []).includes(auth.fullName)
 })
 const comments = ref<Comment[]>([])
+const timeline = ref<TimelineItem[]>([])
 const reports = ref<FieldReport[]>([])
+const suggestingReply = ref(false)
 const subtasks = ref<Subtask[]>([])
 const attachments = ref<Attachment[]>([])
 /** Блок «Файлы заявки»: вложения к заявке и к комментариям (подзадачи — только в карточках подзадач) */
@@ -207,6 +209,20 @@ async function saveProblem() {
 }
 
 const statusDropdownOpen = ref(false)
+const openingTicketChat = ref(false)
+
+async function openTicketChat() {
+  if (!ticket.value || openingTicketChat.value) return
+  openingTicketChat.value = true
+  try {
+    const { id } = await api.messenger.ensureTicketChat(ticketId)
+    await navigateTo({ path: '/messenger', query: { c: id } })
+  } catch (e: any) {
+    toast.error(e?.data?.message || e?.message || 'Не удалось открыть чат по заявке')
+  } finally {
+    openingTicketChat.value = false
+  }
+}
 
 // Attachments
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -367,9 +383,10 @@ async function loadData() {
       api.tickets.getReports(ticketId),
       api.subtasks.getAll(ticketId),
       api.tickets.getAttachments(ticketId),
-      api.systemSettings.getStatuses()
+      api.systemSettings.getStatuses(),
+      api.tickets.getTimeline(ticketId),
     ])
-    const [ticketData, commentsData, reportsData, subtasksData, attaches, statusList] = results.map((r, i) => {
+    const [ticketData, commentsData, reportsData, subtasksData, attaches, statusList, timelineData] = results.map((r, i) => {
       if (r.status === 'fulfilled') return r.value
       console.error(`Ticket page load item ${i} failed:`, r.reason)
       return null
@@ -383,6 +400,7 @@ async function loadData() {
     if (subtasksData) subtasks.value = subtasksData
     if (attaches) attachments.value = attaches
     if (statusList) statuses.value = statusList
+    if (timelineData) timeline.value = timelineData as TimelineItem[]
 
     // Mark ticket as read when viewed
     if (ticketData) {
@@ -408,17 +426,21 @@ async function loadData() {
 
 async function weakRefresh() {
   try {
-    const [ticketData, commentsData, subtasksData, attaches] = await Promise.all([
+    const [ticketData, commentsData, reportsData, subtasksData, attaches, timelineData] = await Promise.all([
       api.tickets.getById(ticketId),
       api.tickets.getComments(ticketId),
+      api.tickets.getReports(ticketId),
       api.subtasks.getAll(ticketId),
-      api.tickets.getAttachments(ticketId)
+      api.tickets.getAttachments(ticketId),
+      api.tickets.getTimeline(ticketId),
     ])
     ticket.value = ticketData
     editedAltTitle.value = ticketData?.alternativeTitle ?? ''
     comments.value = commentsData
+    reports.value = reportsData
     subtasks.value = subtasksData
     attachments.value = attaches
+    timeline.value = timelineData as TimelineItem[]
   } catch { toast.error('Не удалось обновить данные тикета') }
 }
 
@@ -564,6 +586,38 @@ async function sendComment() {
   finally {
     sendingComment.value = false
   }
+}
+
+async function suggestReply() {
+  if (suggestingReply.value) return
+  suggestingReply.value = true
+  try {
+    const res = await api.tickets.suggestReply(ticketId)
+    if (res?.suggestion) {
+      newComment.value = res.suggestion
+      await nextTick()
+      autoResizeComment()
+      toast.success(res.source === 'openai' ? 'Черновик от AI' : 'Черновик из базы знаний')
+    } else {
+      toast.warning('Не удалось подобрать ответ')
+    }
+  } catch {
+    toast.error('Не удалось получить подсказку')
+  } finally {
+    suggestingReply.value = false
+  }
+}
+
+function commentFromTimeline(item: TimelineItem): Comment | undefined {
+  if (item.type !== 'comment' || item.entityId == null) return undefined
+  return comments.value.find((c) => c.id === item.entityId)
+}
+
+function timelineBadge(item: TimelineItem): { label: string; class: string } {
+  if (item.type === 'created') return { label: 'Создана', class: 'bg-blue-100 text-blue-700 border-blue-200' }
+  if (item.type === 'field_report') return { label: 'Акт', class: 'bg-orange-100 text-orange-700 border-orange-200' }
+  if (item.channel === 'email') return { label: 'Email', class: 'bg-cyan-100 text-cyan-700 border-cyan-200' }
+  return { label: 'Коммент', class: 'bg-indigo-100 text-indigo-700 border-indigo-200' }
 }
 
 function onCommentFileSelect(e: Event) {
@@ -1084,6 +1138,16 @@ onUnmounted(() => {
       </div>
 
       <div v-if="ticket" class="flex items-center gap-2 shrink-0 pt-0.5">
+        <button
+          v-if="auth.isStaff"
+          type="button"
+          class="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold uppercase tracking-wider border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300 transition-colors shadow-sm"
+          :disabled="openingTicketChat"
+          @click="openTicketChat"
+        >
+          <MessageSquare :size="14" />
+          {{ openingTicketChat ? 'Открываем…' : 'Обсудить в чате' }}
+        </button>
         <div class="relative">
           <button 
             v-if="auth.isStaff && (isMyTicket || can('ticketEditForeignStatus'))"
@@ -1236,64 +1300,91 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- ИСТОРИЯ / КОММЕНТАРИИ -->
+        <!-- ЛЕНТА -->
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div class="px-5 py-4 border-b border-gray-50 bg-gray-50/20">
-            <span class="text-xs font-bold text-gray-400 uppercase tracking-widest text-[#2f32a5]">История / Комментарии</span>
+          <div class="px-5 py-4 border-b border-gray-50 bg-gray-50/20 flex items-center justify-between gap-2">
+            <span class="text-xs font-bold text-gray-400 uppercase tracking-widest text-[#2f32a5]">Лента</span>
           </div>
           <div class="divide-y divide-gray-50">
-            <div v-for="c in comments" :key="c.id" :class="['w-full px-3 sm:px-5 py-3.5 sm:py-5 flex gap-2.5 sm:gap-4 transition-colors', c.isInternal ? 'bg-yellow-50/30' : '']">
-              <div class="w-8 h-8 sm:w-10 sm:h-10 flex-shrink-0 rounded-full border border-gray-100 bg-white overflow-hidden flex items-center justify-center text-gray-400 font-bold text-[10px] sm:text-xs shadow-sm">
-                <img
-                  v-if="resolveCommentAvatar(c)"
-                  :src="resolveCommentAvatar(c)"
-                  class="w-full h-full object-cover"
-                  alt=""
-                  @error="onAvatarError"
-                />
-                <span v-else>
-                  {{ c.authorName.charAt(0).toUpperCase() }}
-                </span>
-              </div>
-              <div class="flex-1 min-w-0 w-full max-w-none">
-                <div class="flex items-start sm:items-center justify-between mb-1 gap-1">
-                  <div class="flex flex-wrap items-center gap-1 sm:gap-2 min-w-0 flex-1">
-                    <span class="font-bold text-gray-900 dark:text-gray-100 text-sm break-words sm:truncate sm:max-w-[min(100%,28rem)]">{{ c.authorName }}</span>
-                    <span class="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tight hidden sm:inline">{{ c.authorRole }}</span>
-                    <span v-if="c.isInternal" class="text-[8px] sm:text-[9px] uppercase font-bold tracking-wider text-yellow-600 bg-yellow-100 px-1 py-0.5 rounded border border-yellow-200">Внутр.</span>
-                  </div>
-                  <span class="text-[10px] sm:text-[11px] text-gray-500 font-semibold shrink-0 whitespace-nowrap">{{ formatDate(c.createdAt) }}</span>
+            <template v-for="(item, idx) in timeline" :key="`${item.type}-${item.entityId ?? idx}-${item.at}`">
+              <!-- Comment (rich) -->
+              <div
+                v-if="item.type === 'comment' && commentFromTimeline(item)"
+                :class="['w-full px-3 sm:px-5 py-3.5 sm:py-5 flex gap-2.5 sm:gap-4 transition-colors', commentFromTimeline(item)!.isInternal ? 'bg-yellow-50/30' : '']"
+              >
+                <div class="w-8 h-8 sm:w-10 sm:h-10 flex-shrink-0 rounded-full border border-gray-100 bg-white overflow-hidden flex items-center justify-center text-gray-400 font-bold text-[10px] sm:text-xs shadow-sm">
+                  <img
+                    v-if="resolveCommentAvatar(commentFromTimeline(item)!)"
+                    :src="resolveCommentAvatar(commentFromTimeline(item)!)"
+                    class="w-full h-full object-cover"
+                    alt=""
+                    @error="onAvatarError"
+                  />
+                  <span v-else>
+                    {{ commentFromTimeline(item)!.authorName.charAt(0).toUpperCase() }}
+                  </span>
                 </div>
-                <div class="text-[13px] sm:text-sm text-gray-800 whitespace-pre-wrap leading-relaxed w-full max-w-none break-words">{{ c.text }}</div>
-                
-                <div v-if="attachments.filter(a => a.commentId === c.id).length > 0" class="mt-4 flex flex-wrap gap-2 w-full">
-                  <template v-for="att in attachments.filter(a => a.commentId === c.id)" :key="att.id">
-                    <button v-if="(att.contentType || '').includes('image')" @click="openLightbox(resolveMediaUrl(att.url), attachments.filter(a => a.commentId === c.id && (a.contentType || '').includes('image')).map(a => resolveMediaUrl(a.url)))" class="group block w-full max-w-full cursor-pointer text-left">
-                      <div class="w-full aspect-[4/3] max-h-64 sm:max-h-80 bg-gray-100 rounded-lg overflow-hidden border border-gray-100 group-hover:border-indigo-300 transition-all shadow-sm">
-                        <img :src="resolveMediaUrl(att.url)" class="w-full h-full object-cover group-hover:scale-105 transition-transform" :alt="att.fileName" />
-                      </div>
-                    </button>
-                    <div v-else-if="(att.contentType || '').includes('video')" class="w-full max-w-full bg-gray-50 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
-                      <video :src="resolveMediaUrl(att.url)" controls class="w-full h-32 object-cover bg-black"></video>
-                      <div class="px-2 py-1 text-[10px] font-bold text-gray-600 truncate">{{ att.fileName }}</div>
+                <div class="flex-1 min-w-0 w-full max-w-none">
+                  <div class="flex items-start sm:items-center justify-between mb-1 gap-1">
+                    <div class="flex flex-wrap items-center gap-1 sm:gap-2 min-w-0 flex-1">
+                      <span class="font-bold text-gray-900 dark:text-gray-100 text-sm break-words sm:truncate sm:max-w-[min(100%,28rem)]">{{ commentFromTimeline(item)!.authorName }}</span>
+                      <span class="text-[9px] sm:text-[10px] text-gray-400 font-bold uppercase tracking-tight hidden sm:inline">{{ commentFromTimeline(item)!.authorRole }}</span>
+                      <span :class="['text-[8px] sm:text-[9px] uppercase font-bold tracking-wider px-1 py-0.5 rounded border', timelineBadge(item).class]">{{ timelineBadge(item).label }}</span>
+                      <span v-if="commentFromTimeline(item)!.isInternal" class="text-[8px] sm:text-[9px] uppercase font-bold tracking-wider text-yellow-600 bg-yellow-100 px-1 py-0.5 rounded border border-yellow-200">Внутр.</span>
                     </div>
-                    <a v-else :href="resolveMediaUrl(att.url)" target="_blank" class="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-100 rounded-lg text-xs text-gray-600 hover:text-indigo-600 hover:border-indigo-100 transition-all font-medium shadow-sm max-w-full min-w-0">
-                      <Download :size="12" class="text-gray-400 shrink-0" />
-                      <span class="truncate min-w-0">{{ att.fileName }}</span>
-                    </a>
-                  </template>
+                    <span class="text-[10px] sm:text-[11px] text-gray-500 font-semibold shrink-0 whitespace-nowrap">{{ formatDate(item.at) }}</span>
+                  </div>
+                  <div class="text-[13px] sm:text-sm text-gray-800 whitespace-pre-wrap leading-relaxed w-full max-w-none break-words">{{ commentFromTimeline(item)!.text }}</div>
+
+                  <div v-if="attachments.filter(a => a.commentId === commentFromTimeline(item)!.id).length > 0" class="mt-4 flex flex-wrap gap-2 w-full">
+                    <template v-for="att in attachments.filter(a => a.commentId === commentFromTimeline(item)!.id)" :key="att.id">
+                      <button v-if="(att.contentType || '').includes('image')" @click="openLightbox(resolveMediaUrl(att.url), attachments.filter(a => a.commentId === commentFromTimeline(item)!.id && (a.contentType || '').includes('image')).map(a => resolveMediaUrl(a.url)))" class="group block w-full max-w-full cursor-pointer text-left">
+                        <div class="w-full aspect-[4/3] max-h-64 sm:max-h-80 bg-gray-100 rounded-lg overflow-hidden border border-gray-100 group-hover:border-indigo-300 transition-all shadow-sm">
+                          <img :src="resolveMediaUrl(att.url)" class="w-full h-full object-cover group-hover:scale-105 transition-transform" :alt="att.fileName" />
+                        </div>
+                      </button>
+                      <div v-else-if="(att.contentType || '').includes('video')" class="w-full max-w-full bg-gray-50 rounded-lg overflow-hidden border border-gray-100 shadow-sm">
+                        <video :src="resolveMediaUrl(att.url)" controls class="w-full h-32 object-cover bg-black"></video>
+                        <div class="px-2 py-1 text-[10px] font-bold text-gray-600 truncate">{{ att.fileName }}</div>
+                      </div>
+                      <a v-else :href="resolveMediaUrl(att.url)" target="_blank" class="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-100 rounded-lg text-xs text-gray-600 hover:text-indigo-600 hover:border-indigo-100 transition-all font-medium shadow-sm max-w-full min-w-0">
+                        <Download :size="12" class="text-gray-400 shrink-0" />
+                        <span class="truncate min-w-0">{{ att.fileName }}</span>
+                      </a>
+                    </template>
+                  </div>
+                  <MessageReactions
+                    :reactions="(commentFromTimeline(item)!.reactions || []) as any"
+                    :current-user-id="auth.userId"
+                    :can-add="can('canReactToTicketComments')"
+                    @toggle="(emoji: string) => toggleCommentReaction(commentFromTimeline(item)!, emoji)"
+                  />
                 </div>
-                <MessageReactions
-                  :reactions="(c.reactions || []) as any"
-                  :current-user-id="auth.userId"
-                  :can-add="can('canReactToTicketComments')"
-                  @toggle="(emoji: string) => toggleCommentReaction(c, emoji)"
-                />
               </div>
-            </div>
-            <div v-if="comments.length === 0" class="text-center py-16">
+
+              <!-- Created / field report / fallback comment -->
+              <div v-else class="w-full px-3 sm:px-5 py-3.5 sm:py-4 flex gap-2.5 sm:gap-4">
+                <div class="w-8 h-8 sm:w-10 sm:h-10 flex-shrink-0 rounded-full border border-gray-100 bg-gray-50 flex items-center justify-center text-gray-400 shadow-sm">
+                  <Clock v-if="item.type === 'created'" :size="16" />
+                  <FileText v-else-if="item.type === 'field_report'" :size="16" />
+                  <MessageSquare v-else :size="16" />
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-start justify-between gap-2 mb-1">
+                    <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+                      <span :class="['text-[8px] sm:text-[9px] uppercase font-bold tracking-wider px-1 py-0.5 rounded border', timelineBadge(item).class]">{{ timelineBadge(item).label }}</span>
+                      <span v-if="item.authorName" class="font-bold text-gray-900 dark:text-gray-100 text-sm">{{ item.authorName }}</span>
+                      <span v-if="item.equipmentType" class="text-[10px] text-gray-400">{{ item.equipmentType }}</span>
+                    </div>
+                    <span class="text-[10px] sm:text-[11px] text-gray-500 font-semibold shrink-0 whitespace-nowrap">{{ formatDate(item.at) }}</span>
+                  </div>
+                  <div class="text-[13px] sm:text-sm text-gray-700 whitespace-pre-wrap leading-relaxed break-words">{{ item.text || (item.type === 'created' ? 'Заявка создана' : '') }}</div>
+                </div>
+              </div>
+            </template>
+            <div v-if="timeline.length === 0" class="text-center py-16">
               <MessageSquare :size="48" class="mx-auto text-gray-100 mb-4" />
-              <p class="text-sm text-gray-400 italic">Комментариев пока нет</p>
+              <p class="text-sm text-gray-400 italic">Событий пока нет</p>
             </div>
           </div>
         </div>
@@ -1934,6 +2025,17 @@ onUnmounted(() => {
                 <input type="file" ref="commentFileRef" multiple class="hidden" @change="onCommentFileSelect" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" />
                 <button type="button" @click="commentFileRef?.click()" class="p-2 text-gray-400 dark:text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 active:bg-gray-100 dark:active:bg-zinc-800 rounded-lg transition-colors shrink-0" title="Прикрепить файл">
                   <Paperclip :size="18"/>
+                </button>
+                <button
+                  v-if="auth.isStaff"
+                  type="button"
+                  @click="suggestReply"
+                  :disabled="suggestingReply"
+                  class="inline-flex items-center gap-1 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg disabled:opacity-50 transition-colors shrink-0"
+                  title="Подсказать ответ"
+                >
+                  <HelpCircle :size="14" />
+                  <span class="hidden sm:inline">{{ suggestingReply ? '…' : 'Подсказать ответ' }}</span>
                 </button>
                 <input ref="fileInputRef" type="file" multiple class="hidden" @change="handleFileUpload" />
                 <span v-if="uploadingFiles" class="text-[10px] text-gray-400 dark:text-zinc-500 flex items-center gap-1 font-bold shrink-0"><RefreshCw :size="12" class="animate-spin"/></span>

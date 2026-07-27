@@ -154,6 +154,28 @@ export function useApi() {
     getSla: (id: number) => 
       fetch<any>(`/api/Tickets/${id}/sla`),
     
+    getTimeline: (id: number) =>
+      fetch<Array<{
+        type: string
+        at: string
+        channel?: string | null
+        authorName?: string | null
+        text?: string | null
+        isInternal?: boolean | null
+        entityId?: number | null
+        actionType?: string | null
+        equipmentType?: string | null
+      }>>(`/api/Tickets/${id}/timeline`),
+
+    suggestFields: (data: { title?: string; problem?: string }) =>
+      fetch<{ requestType?: string | null; priority?: string | null; department?: string | null }>(
+        '/api/Tickets/suggest-fields',
+        { method: 'POST', body: data }
+      ),
+
+    suggestReply: (id: number) =>
+      fetch<{ suggestion: string; source: string }>(`/api/Tickets/${id}/suggest-reply`, { method: 'POST' }),
+
     getAttachments: (id: number) => 
       fetch<any[]>(`/api/tickets/${id}/attachments`),
     
@@ -247,6 +269,19 @@ export function useApi() {
       fetch<
         { id: number; name: string; address: string; maintenanceStatus: string; clientId: number | null }[]
       >('/api/ClientPortal/service-objects'),
+
+    getTickets: () =>
+      fetch<
+        {
+          id: number
+          title: string
+          status: string
+          priority: string
+          createdAt: string
+          objectId: number | null
+          requestType: string
+        }[]
+      >('/api/ClientPortal/tickets'),
   }
   
   // Service Objects API
@@ -375,6 +410,15 @@ export function useApi() {
 
     testOkdeskConnection: () =>
       fetch<{ valid: boolean }>('/api/SystemSettings/okdesk/test-connection', { method: 'POST' }),
+
+    importOkdesk: () =>
+      fetch<{
+        companiesFetched: number
+        companiesUpserted: number
+        issuesFetched: number
+        issuesUpserted: number
+        warning: string | null
+      }>('/api/SystemSettings/okdesk/import', { method: 'POST' }),
   }
   
   // Reports API
@@ -542,6 +586,28 @@ export function useApi() {
 
     markAsRead: (conversationId: string) =>
       fetch<void>(`/api/Messenger/conversations/${conversationId}/read`, { method: 'POST' }),
+
+    ensureDepartmentChannel: (departmentSlug: string) =>
+      fetch<{ id: string }>('/api/Messenger/channels/department', {
+        method: 'POST',
+        body: { departmentSlug },
+      }),
+
+    ensureTicketChat: (ticketId: number) =>
+      fetch<{ id: string }>(`/api/Messenger/conversations/ticket/${ticketId}`, {
+        method: 'POST',
+      }),
+
+    searchMessages: (q: string) =>
+      fetch<
+        {
+          messageId: string
+          conversationId: string
+          body: string
+          createdAtUtc: string
+          senderFullName: string
+        }[]
+      >(`/api/Messenger/search?q=${encodeURIComponent(q)}`),
   }
   
   // Google Sync API
@@ -552,6 +618,25 @@ export function useApi() {
         body: data,
         headers: { 'X-Sync-Key': syncKey }
       }),
+  }
+
+  const knowledgeBaseApi = {
+    getCategories: () => fetch<any[]>('/api/KnowledgeBase/categories'),
+    saveCategory: (data: any) => fetch('/api/KnowledgeBase/categories', { method: 'POST', body: data }),
+    deleteCategory: (id: number) => fetch(`/api/KnowledgeBase/categories/${id}`, { method: 'DELETE' }),
+    getArticles: () => fetch<any[]>('/api/KnowledgeBase/articles'),
+    getPublished: () => fetch<any[]>('/api/KnowledgeBase/articles/published'),
+    saveArticle: (data: any) => fetch('/api/KnowledgeBase/articles', { method: 'POST', body: data }),
+    deleteArticle: (id: number) => fetch(`/api/KnowledgeBase/articles/${id}`, { method: 'DELETE' }),
+    search: (q: string) => fetch<any[]>(`/api/KnowledgeBase/search?q=${encodeURIComponent(q)}`),
+    suggest: (ticketTitle: string) =>
+      fetch<any[]>(`/api/KnowledgeBase/suggest?ticketTitle=${encodeURIComponent(ticketTitle)}`),
+  }
+
+  const automationRulesApi = {
+    getAll: () => fetch<any[]>('/api/AutomationRules'),
+    save: (data: any) => fetch('/api/AutomationRules', { method: 'POST', body: data }),
+    delete: (id: number) => fetch(`/api/AutomationRules/${id}`, { method: 'DELETE' }),
   }
   
   return {
@@ -572,5 +657,7 @@ export function useApi() {
     spreadsheets: spreadsheetsApi,
     googleSync: googleSyncApi,
     messenger: messengerApi,
+    knowledgeBase: knowledgeBaseApi,
+    automationRules: automationRulesApi,
   }
 }

@@ -8,6 +8,15 @@ export interface AuthResponse {
   avatarUrl: string
 }
 
+export interface AuthState {
+  token: string
+  userId: string
+  fullName: string
+  email: string
+  role: string
+  avatarUrl: string
+}
+
 export interface LoginRequest {
   username?: string
   email?: string
@@ -100,6 +109,18 @@ export interface Comment {
   authorAvatarUrl: string
   authorUserId: string
   reactions?: Reaction[]
+}
+
+export interface TimelineItem {
+  type: 'created' | 'comment' | 'field_report' | string
+  at: string
+  channel?: string | null
+  authorName?: string | null
+  text?: string | null
+  isInternal?: boolean | null
+  entityId?: number | null
+  actionType?: string | null
+  equipmentType?: string | null
 }
 
 export interface CreateCommentRequest {

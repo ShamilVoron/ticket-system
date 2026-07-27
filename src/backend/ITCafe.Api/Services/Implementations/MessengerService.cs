@@ -702,6 +702,198 @@ public class MessengerService(
         await context.SaveChangesAsync();
     }
 
+    public async Task<Guid> EnsureDepartmentChannelAsync(string departmentSlug, string currentUserId)
+    {
+        if (!TryNormalizeDepartmentSlug(departmentSlug, out var slug, out var title))
+            throw new ArgumentException("Неизвестный отдел. Допустимы: support, engineers, repair, coordinators, developers, accounting, procurement, sysadmin.");
+
+        var existing = await context.ChatConversations
+            .Include(c => c.Members)
+            .FirstOrDefaultAsync(c => c.IsGroup && c.DepartmentSlug == slug);
+
+        var now = DateTime.UtcNow;
+        if (existing != null)
+        {
+            if (!existing.Members.Any(m => m.UserId == currentUserId))
+            {
+                existing.Members.Add(new ChatMember { UserId = currentUserId, JoinedAtUtc = now });
+                await context.SaveChangesAsync();
+            }
+            return existing.Id;
+        }
+
+        var conv = new ChatConversation
+        {
+            Id = Guid.NewGuid(),
+            IsGroup = true,
+            Title = title,
+            DepartmentSlug = slug,
+            CreatedByUserId = currentUserId,
+            CreatedAtUtc = now,
+            LastMessageAtUtc = now,
+            Members = { new ChatMember { UserId = currentUserId, JoinedAtUtc = now } },
+        };
+        context.ChatConversations.Add(conv);
+        await context.SaveChangesAsync();
+        return conv.Id;
+    }
+
+    public async Task<Guid> EnsureTicketChatAsync(int ticketId, string currentUserId)
+    {
+        var ticket = await context.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.Id == ticketId)
+            ?? throw new KeyNotFoundException($"Заявка #{ticketId} не найдена.");
+
+        var existing = await context.ChatConversations
+            .Include(c => c.Members)
+            .FirstOrDefaultAsync(c => c.IsGroup && c.TicketId == ticketId);
+
+        var now = DateTime.UtcNow;
+        var memberIds = new HashSet<string>(StringComparer.Ordinal) { currentUserId };
+        foreach (var a in SplitAssignees(ticket.Assignee))
+        {
+            if (await IsStaffAsync(a))
+                memberIds.Add(a);
+        }
+
+        if (existing != null)
+        {
+            var added = false;
+            foreach (var uid in memberIds)
+            {
+                if (existing.Members.Any(m => m.UserId == uid)) continue;
+                existing.Members.Add(new ChatMember { UserId = uid, JoinedAtUtc = now });
+                added = true;
+            }
+            if (added)
+                await context.SaveChangesAsync();
+            return existing.Id;
+        }
+
+        var conv = new ChatConversation
+        {
+            Id = Guid.NewGuid(),
+            IsGroup = true,
+            Title = $"Заявка #{ticketId}",
+            TicketId = ticketId,
+            CreatedByUserId = currentUserId,
+            CreatedAtUtc = now,
+            LastMessageAtUtc = now,
+            Members = memberIds.Select(uid => new ChatMember { UserId = uid, JoinedAtUtc = now }).ToList(),
+        };
+        context.ChatConversations.Add(conv);
+
+        var bootstrap = new ChatMessage
+        {
+            Id = Guid.NewGuid(),
+            ConversationId = conv.Id,
+            SenderUserId = currentUserId,
+            Body = $"Чат по заявке #{ticketId}",
+            CreatedAtUtc = now,
+        };
+        context.ChatMessages.Add(bootstrap);
+        await context.SaveChangesAsync();
+        return conv.Id;
+    }
+
+    public async Task<IReadOnlyList<ChatMessageSearchResultDto>> SearchMessagesAsync(string currentUserId, string q)
+    {
+        var query = (q ?? string.Empty).Trim();
+        if (query.Length < 1)
+            return Array.Empty<ChatMessageSearchResultDto>();
+        if (query.Length > 200)
+            query = query[..200];
+
+        var convIds = await context.ChatMembers.AsNoTracking()
+            .Where(m => m.UserId == currentUserId)
+            .Select(m => m.ConversationId)
+            .ToListAsync();
+        if (convIds.Count == 0)
+            return Array.Empty<ChatMessageSearchResultDto>();
+
+        var pattern = $"%{EscapeLikePattern(query)}%";
+        var rows = await (
+            from m in context.ChatMessages.AsNoTracking()
+            where convIds.Contains(m.ConversationId)
+            where EF.Functions.ILike(m.Body, pattern)
+            orderby m.CreatedAtUtc descending
+            select new { m.Id, m.ConversationId, m.Body, m.CreatedAtUtc, m.SenderUserId }
+        ).Take(50).ToListAsync();
+
+        var senderIds = rows.Select(r => r.SenderUserId).Distinct(StringComparer.Ordinal).ToList();
+        var nameMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (senderIds.Count > 0)
+        {
+            var names = await context.UserAccounts.AsNoTracking()
+                .Where(u => senderIds.Contains(u.UserId))
+                .Select(u => new { u.UserId, u.FullName })
+                .ToListAsync();
+            foreach (var n in names)
+                nameMap[n.UserId] = n.FullName;
+        }
+
+        return rows.Select(r => new ChatMessageSearchResultDto(
+            r.Id,
+            r.ConversationId,
+            r.Body,
+            r.CreatedAtUtc,
+            nameMap.GetValueOrDefault(r.SenderUserId, r.SenderUserId)
+        )).ToList();
+    }
+
+    private static readonly Dictionary<string, string> DepartmentChannelTitles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["support"] = "#support",
+        ["engineers"] = "#engineers",
+        ["repair"] = "#repair",
+        ["coordinators"] = "#coordinators",
+        ["developers"] = "#developers",
+        ["accounting"] = "#accounting",
+        ["procurement"] = "#procurement",
+        ["sysadmin"] = "#sysadmin",
+        // aliases → canonical slug
+        ["support_l1"] = "#support",
+        ["support_l2"] = "#support",
+        ["head_support"] = "#support",
+        ["field_engineer"] = "#engineers",
+        ["head_engineers"] = "#engineers",
+        ["head_repair"] = "#repair",
+        ["coordinator"] = "#coordinators",
+        ["developer"] = "#developers",
+        ["head_dev"] = "#developers",
+        ["accountant"] = "#accounting",
+        ["1 линия"] = "#support",
+        ["2 линия"] = "#support",
+        ["выездные инженеры"] = "#engineers",
+        ["ремонт / сервис"] = "#repair",
+        ["координатор"] = "#coordinators",
+        ["разработчики"] = "#developers",
+        ["бухгалтерия"] = "#accounting",
+        ["закупки"] = "#procurement",
+        ["системный администратор"] = "#sysadmin",
+    };
+
+    private static bool TryNormalizeDepartmentSlug(string? raw, out string slug, out string title)
+    {
+        slug = string.Empty;
+        title = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var key = raw.Trim().TrimStart('#');
+        if (!DepartmentChannelTitles.TryGetValue(key, out var channelTitle))
+            return false;
+        title = channelTitle;
+        slug = channelTitle.TrimStart('#');
+        return true;
+    }
+
+    private static string EscapeLikePattern(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+
+    private static string[] SplitAssignees(string s) =>
+        string.IsNullOrWhiteSpace(s) ? [] :
+        s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
     private static string replaceSeparators(string path) =>
         path.Replace('\\', '/');
 

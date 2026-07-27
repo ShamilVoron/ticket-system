@@ -18,4 +18,6 @@ public class TicketComment
     public int? OkdeskId { get; set; }
     /// <summary>JSON-массив реакций: [{"emoji":"🐧","userId":"...","userName":"..."}]</summary>
     public string? ReactionsJson { get; set; }
+    /// <summary>RFC Message-Id входящего email (для трединга IMAP In-Reply-To / References).</summary>
+    public string? EmailMessageId { get; set; }
 }

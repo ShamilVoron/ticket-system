@@ -1,6 +1,6 @@
 export default defineNuxtConfig({
-  // В `nuxt dev` оставляем панель; в production-сборке (`npm run build` + `node .output/...`) не подключаем devtools
-  devtools: { enabled: process.env.NODE_ENV !== 'production' },
+  // DevTools отключены по умолчанию (мешают UI); включить: NUXT_DEVTOOLS=true
+  devtools: { enabled: process.env.NUXT_DEVTOOLS === 'true' },
   modules: ['@nuxtjs/tailwindcss', '@pinia/nuxt'],
   ssr: false,
 
@@ -35,10 +35,10 @@ export default defineNuxtConfig({
     public: {
       apiBaseUrl: '',
       /**
-       * Если задан (как NUXT_DEV_BACKEND_URL при старте dev), браузер ходит на хабы по этому origin (negotiate+WS).
-       * Иначе — только относительные `/hubs/*` через прокси (без жёсткого :5000).
+       * Origin API для SignalR в nuxt dev (WebSocket). По умолчанию локальный Kestrel —
+       * прокси Nitro часто ломает WS upgrade.
        */
-      devBackendUrl: process.env.NUXT_DEV_BACKEND_URL || '',
+      devBackendUrl: process.env.NUXT_DEV_BACKEND_URL || 'http://127.0.0.1:5000',
     },
   },
 

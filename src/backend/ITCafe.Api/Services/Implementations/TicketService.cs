@@ -19,6 +19,7 @@ public class TicketService : ITicketService
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly ITelegramNotificationService _telegram;
     private readonly IOkdeskSyncService _okdesk;
+    private readonly IAutomationEngineService? _automation;
 
     private static readonly JsonSerializerOptions BriefJsonOpts = new()
     {
@@ -31,7 +32,14 @@ public class TicketService : ITicketService
         ["burger"] = new[] { "бургер-бк", "бургер бк" }
     };
 
-    public TicketService(AppDbContext context, TicketRealtimeBroadcaster realtime, IHttpContextAccessor httpContextAccessor, ITelegramNotificationService telegram, IOkdeskSyncService okdesk, IServiceScopeFactory scopeFactory)
+    public TicketService(
+        AppDbContext context,
+        TicketRealtimeBroadcaster realtime,
+        IHttpContextAccessor httpContextAccessor,
+        ITelegramNotificationService telegram,
+        IOkdeskSyncService okdesk,
+        IServiceScopeFactory scopeFactory,
+        IAutomationEngineService? automation = null)
     {
         _context = context;
         _realtime = realtime;
@@ -39,6 +47,7 @@ public class TicketService : ITicketService
         _telegram = telegram;
         _okdesk = okdesk;
         _scopeFactory = scopeFactory;
+        _automation = automation;
     }
 
     private string? CurrentUserId() =>
@@ -250,6 +259,9 @@ public class TicketService : ITicketService
         }
 
         var tickets = await query.ToListAsync();
+        if (tickets.Count == 0)
+            return Array.Empty<TicketDto>();
+
         var clients = await _context.Clients.AsNoTracking().ToDictionaryAsync(c => c.Id);
         var companies = await _context.Companies.AsNoTracking().ToDictionaryAsync(c => c.Id);
         var objects = await _context.ServiceObjects.AsNoTracking().ToDictionaryAsync(o => o.Id);
@@ -262,10 +274,15 @@ public class TicketService : ITicketService
         var ticketIds = tickets.Select(t => t.Id).ToList();
         var currentUserId = CurrentUserId();
 
-        var commentTextsByTicket = await _context.TicketComments
+        // Materialize then group — EF cannot translate GroupBy → ToDictionary(Select.ToArray()).
+        var commentRows = await _context.TicketComments
+            .AsNoTracking()
             .Where(c => ticketIds.Contains(c.TicketId))
+            .Select(c => new { c.TicketId, c.Text })
+            .ToListAsync();
+        var commentTextsByTicket = commentRows
             .GroupBy(c => c.TicketId)
-            .ToDictionaryAsync(g => g.Key, g => g.Select(c => c.Text).ToArray());
+            .ToDictionary(g => g.Key, g => g.Select(c => c.Text).ToArray());
 
         var taskLinksByTicket = await _context.Tickets
             .Where(t => ticketIds.Contains(t.Id) && !string.IsNullOrEmpty(t.TaskLinksJson))
@@ -412,10 +429,15 @@ public class TicketService : ITicketService
             .Select(g => new { g.Key, Count = g.Count() })
             .ToDictionaryAsync(x => x.Key, x => x.Count);
 
-        var commentTextsByTicket = await _context.TicketComments
+        // Materialize then group — EF cannot translate GroupBy → ToDictionary(Select.ToArray()).
+        var commentRows = await _context.TicketComments
+            .AsNoTracking()
             .Where(c => ticketIds.Contains(c.TicketId))
+            .Select(c => new { c.TicketId, c.Text })
+            .ToListAsync();
+        var commentTextsByTicket = commentRows
             .GroupBy(c => c.TicketId)
-            .ToDictionaryAsync(g => g.Key, g => g.Select(c => c.Text).ToArray());
+            .ToDictionary(g => g.Key, g => g.Select(c => c.Text).ToArray());
 
         var taskLinksByTicket = await _context.Tickets
             .Where(t => ticketIds.Contains(t.Id) && !string.IsNullOrEmpty(t.TaskLinksJson))
@@ -893,6 +915,73 @@ public class TicketService : ITicketService
         }).ToList();
     }
 
+    public async Task<IEnumerable<TimelineItemDto>> GetTimelineAsync(int id)
+    {
+        var ticket = await _context.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id);
+        if (ticket == null) throw new KeyNotFoundException("Ticket not found");
+        EnsureTicketAccess(ticket);
+
+        var staff = IsStaff();
+        var items = new List<TimelineItemDto>
+        {
+            new(
+                Type: "created",
+                At: ticket.CreatedAt,
+                Channel: null,
+                AuthorName: null,
+                Text: ticket.Title,
+                IsInternal: null,
+                EntityId: ticket.Id,
+                ActionType: null,
+                EquipmentType: null)
+        };
+
+        var commentsQuery = _context.TicketComments.AsNoTracking().Where(c => c.TicketId == id);
+        if (!staff)
+            commentsQuery = commentsQuery.Where(c => !c.IsInternal);
+
+        var comments = await commentsQuery.OrderBy(c => c.CreatedAt).ToListAsync();
+        foreach (var c in comments)
+        {
+            var channel = string.IsNullOrWhiteSpace(c.EmailMessageId) ? "comment" : "email";
+            items.Add(new TimelineItemDto(
+                Type: "comment",
+                At: c.CreatedAt,
+                Channel: channel,
+                AuthorName: c.AuthorName,
+                Text: c.Text,
+                IsInternal: c.IsInternal,
+                EntityId: c.Id,
+                ActionType: null,
+                EquipmentType: null));
+        }
+
+        var reports = await _context.FieldReports.AsNoTracking()
+            .Where(r => r.TicketId == id)
+            .OrderBy(r => r.VisitDate)
+            .ToListAsync();
+
+        foreach (var r in reports)
+        {
+            var text = string.IsNullOrWhiteSpace(r.WorkDone)
+                ? r.ActionType
+                : $"{r.ActionType}: {r.WorkDone}";
+            items.Add(new TimelineItemDto(
+                Type: "field_report",
+                At: r.VisitDate,
+                Channel: null,
+                AuthorName: r.EngineerName,
+                Text: text,
+                IsInternal: null,
+                EntityId: r.Id,
+                ActionType: r.ActionType,
+                EquipmentType: r.EquipmentType));
+        }
+
+        // No status-change history table — created + comments + reports only.
+        return items.OrderBy(i => i.At).ThenBy(i => i.EntityId ?? 0).ToList();
+    }
+
     public async Task<CommentDto> AddCommentAsync(int id, CreateCommentRequest request, string currentUserId, string currentUserName, string currentUserRole)
     {
         var ticket = await _context.Tickets.FindAsync(id);
@@ -1302,6 +1391,18 @@ public class TicketService : ITicketService
         await _telegram.NotifyNewTicketAsync(ticket);
         if (!string.IsNullOrWhiteSpace(ticket.Assignee))
             await _telegram.NotifyAssigneeChangedAsync(ticket);
+        if (_automation != null)
+        {
+            try
+            {
+                await _automation.EvaluateTicketCreatedAsync(ticket);
+                await _automation.EvaluateTriggerAsync("vip_email_domain", ticket);
+            }
+            catch
+            {
+                /* automation must not block ticket create */
+            }
+        }
         return ticket;
     }
 

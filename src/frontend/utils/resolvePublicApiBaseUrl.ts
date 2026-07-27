@@ -34,17 +34,17 @@ export function resolvePublicApiBaseUrl(apiBaseUrl: string | undefined): string 
 }
 
 /**
- * Прямой URL хабов в браузере — только если задан `NUXT_DEV_BACKEND_URL` (runtime public `devBackendUrl`).
- * Иначе тот же origin + прокси Nitro/Vite (порт API с машины пользователя часто не :5000 / недоступен — будет ERR_CONNECTION_REFUSED).
+ * Прямой URL хабов в dev: WebSocket через Nitro/Vite proxy часто отдаёт HTTP 200 вместо 101.
+ * По умолчанию — локальный Kestrel; переопределяется через `NUXT_DEV_BACKEND_URL`.
+ * В production всегда same-origin `/hubs/*`.
  */
 export function resolveBrowserSignalRHubOrigin(devBackendUrlFromConfig: string | undefined): string {
   if (typeof window === 'undefined') return ''
   if (!import.meta.dev) return ''
-  const raw = (devBackendUrlFromConfig ?? '').trim()
-  if (!raw) return ''
+  const raw = (devBackendUrlFromConfig ?? '').trim() || 'http://127.0.0.1:5000'
   try {
     return new URL(raw).origin
   } catch {
-    return ''
+    return 'http://127.0.0.1:5000'
   }
 }

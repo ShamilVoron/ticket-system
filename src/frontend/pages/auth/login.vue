@@ -19,10 +19,16 @@ const loading = ref(false)
 const error = ref('')
 const showPassword = ref(false)
 
+function homePath() {
+  if (auth.isFieldEngineer) return '/field'
+  if (auth.isClient) return '/portal'
+  return '/'
+}
+
 onMounted(() => {
   auth.hydrate()
   if (auth.isLoggedIn) {
-    router.push('/')
+    router.push(homePath())
   }
 })
 
@@ -42,6 +48,26 @@ async function handleLogin() {
     })
 
     auth.setAuth(response)
+    if (response.role === 'field_engineer') {
+      router.push('/field')
+      return
+    }
+    if (response.role === 'client') {
+      router.push('/portal')
+      return
+    }
+    if (response.role === 'super_admin') {
+      try {
+        const { branding, load } = useSystemBranding()
+        await load(true)
+        if (!branding.value.onboardingCompleted && localStorage.getItem('onboarding_skip') !== '1') {
+          router.push('/onboarding')
+          return
+        }
+      } catch {
+        /* fall through to home */
+      }
+    }
     router.push('/')
   } catch (e: any) {
     console.error('Login error:', e)

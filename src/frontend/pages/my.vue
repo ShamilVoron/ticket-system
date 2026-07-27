@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RefreshCw, ChevronLeft, ChevronRight, Ticket, Clock, CheckCircle2, Hourglass, BarChart3, Activity } from 'lucide-vue-next'
+import { isTicketSignalRConnected } from '~/composables/useTicketSignalR'
 import type { Ticket as TicketType } from '~/types'
 
 const api = useApi()
@@ -8,6 +9,7 @@ const auth = useAuthStore()
 const tickets = ref<TicketType[]>([])
 const loading = ref(true)
 const PER_PAGE = 10
+let pollInterval: ReturnType<typeof setInterval> | null = null
 
 async function loadTickets() {
   loading.value = true
@@ -108,7 +110,17 @@ function statusBadge(status: string): string {
 
 useTicketSignalR(() => { loadTickets() })
 
-onMounted(() => { loadTickets() })
+onMounted(() => {
+  loadTickets()
+  // Fallback only when SignalR is disconnected
+  pollInterval = setInterval(() => {
+    if (!isTicketSignalRConnected()) void loadTickets()
+  }, 120000)
+})
+
+onUnmounted(() => {
+  if (pollInterval) clearInterval(pollInterval)
+})
 </script>
 
 <template>
@@ -199,7 +211,7 @@ onMounted(() => { loadTickets() })
             >
               <div class="flex items-start justify-between gap-2 mb-1.5">
                 <span class="font-mono text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">#{{ t.id }}</span>
-                <span :class="['px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border', statusBadge(t.status)]">{{ t.status }}</span>
+                <TicketStatusBadge :status="t.status" :color-class="statusBadge(t.status)" class="!rounded text-[9px] font-bold uppercase" />
               </div>
               <h4 class="text-[13px] font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors leading-snug mb-1.5 line-clamp-2">{{ t.title }}</h4>
               <div class="flex items-center justify-between text-[10px] text-gray-400">
@@ -215,10 +227,11 @@ onMounted(() => { loadTickets() })
                 ]">{{ t.priority }}</span>
               </div>
             </div>
-            <div v-if="inWork.length === 0" class="flex flex-col items-center justify-center py-10 text-gray-400">
-              <Clock :size="20" class="mb-1.5 opacity-30" />
-              <span class="text-[11px]">Пусто</span>
-            </div>
+            <EmptyState v-if="inWork.length === 0" class="!py-10" title="Пусто" description="Нет заявок в работе">
+              <template #icon>
+                <Clock :size="20" class="opacity-30 text-gray-400" />
+              </template>
+            </EmptyState>
           </div>
           <div v-if="totalPages(inWork) > 1" class="flex items-center justify-between mt-2 px-1">
             <span class="text-[10px] text-gray-400">{{ pageInWork }} / {{ totalPages(inWork) }}</span>
@@ -244,7 +257,7 @@ onMounted(() => { loadTickets() })
             >
               <div class="flex items-start justify-between gap-2 mb-1.5">
                 <span class="font-mono text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">#{{ t.id }}</span>
-                <span :class="['px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border', statusBadge(t.status)]">{{ t.status }}</span>
+                <TicketStatusBadge :status="t.status" :color-class="statusBadge(t.status)" class="!rounded text-[9px] font-bold uppercase" />
               </div>
               <h4 class="text-[13px] font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors leading-snug mb-1.5 line-clamp-2">{{ t.title }}</h4>
               <div class="flex items-center justify-between text-[10px] text-gray-400">
@@ -260,10 +273,11 @@ onMounted(() => { loadTickets() })
                 ]">{{ t.priority }}</span>
               </div>
             </div>
-            <div v-if="waiting.length === 0" class="flex flex-col items-center justify-center py-10 text-gray-400">
-              <Hourglass :size="20" class="mb-1.5 opacity-30" />
-              <span class="text-[11px]">Пусто</span>
-            </div>
+            <EmptyState v-if="waiting.length === 0" class="!py-10" title="Пусто" description="Нет заявок в ожидании">
+              <template #icon>
+                <Hourglass :size="20" class="opacity-30 text-gray-400" />
+              </template>
+            </EmptyState>
           </div>
           <div v-if="totalPages(waiting) > 1" class="flex items-center justify-between mt-2 px-1">
             <span class="text-[10px] text-gray-400">{{ pageWaiting }} / {{ totalPages(waiting) }}</span>
@@ -289,7 +303,11 @@ onMounted(() => { loadTickets() })
             >
               <div class="flex items-start justify-between gap-2 mb-1.5">
                 <span class="font-mono text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">#{{ t.id }}</span>
-                <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border bg-green-50 text-green-700 border-green-200">{{ t.status }}</span>
+                <TicketStatusBadge
+                  :status="t.status"
+                  color-class="bg-green-50 text-green-700 border-green-200"
+                  class="!rounded text-[9px] font-bold uppercase"
+                />
               </div>
               <h4 class="text-[13px] font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors leading-snug mb-1.5 line-clamp-2">{{ t.title }}</h4>
               <div class="flex items-center justify-between text-[10px] text-gray-400">
@@ -297,10 +315,11 @@ onMounted(() => { loadTickets() })
                 <span class="font-mono">{{ formatDate(t.createdAt) }}</span>
               </div>
             </div>
-            <div v-if="done.length === 0" class="flex flex-col items-center justify-center py-10 text-gray-400">
-              <CheckCircle2 :size="20" class="mb-1.5 opacity-30" />
-              <span class="text-[11px]">Пусто</span>
-            </div>
+            <EmptyState v-if="done.length === 0" class="!py-10" title="Пусто" description="Нет закрытых заявок">
+              <template #icon>
+                <CheckCircle2 :size="20" class="opacity-30 text-gray-400" />
+              </template>
+            </EmptyState>
           </div>
           <div v-if="totalPages(done) > 1" class="flex items-center justify-between mt-2 px-1">
             <span class="text-[10px] text-gray-400">{{ pageDone }} / {{ totalPages(done) }}</span>

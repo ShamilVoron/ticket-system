@@ -21,6 +21,7 @@ public interface ITicketService
     Task<FieldReportDto> AddFieldReportAsync(int id, CreateFieldReportRequest request, string currentUserName);
     Task<FieldReportDto> UpdateFieldReportAsync(int ticketId, int reportId, UpdateFieldReportRequest request);
     Task<IEnumerable<CommentDto>> GetCommentsAsync(int id);
+    Task<IEnumerable<TimelineItemDto>> GetTimelineAsync(int id);
     Task<CommentDto> AddCommentAsync(int id, CreateCommentRequest request, string currentUserId, string currentUserName, string currentUserRole);
     Task<CommentDto> ToggleCommentReactionAsync(int ticketId, int commentId, string userId, string userName, string emoji);
     Task MarkTicketAsReadAsync(int ticketId, string userId);

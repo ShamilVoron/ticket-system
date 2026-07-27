@@ -7,6 +7,7 @@ namespace ITCafe.Api.Models;
 public class Ticket
 {
     public int Id { get; set; }
+    public int? OrganizationId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Problem { get; set; } = string.Empty;
     public string Status { get; set; } = "Открыт";

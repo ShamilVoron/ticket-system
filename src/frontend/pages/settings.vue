@@ -6,11 +6,80 @@ const api = useApi()
 const auth = useAuthStore()
 const toast = useToast()
 
-const activeTab = ref<'statuses' | 'sla' | 'telegram' | 'general'>('statuses')
+const activeTab = ref<'statuses' | 'sla' | 'telegram' | 'kb' | 'automation' | 'general'>('statuses')
 const loading = ref(false)
 const saving = ref(false)
 const message = ref('')
 const error = ref('')
+
+// Knowledge Base
+const kbCategories = ref<any[]>([])
+const kbArticles = ref<any[]>([])
+const newKbCategory = ref({ name: '', sortOrder: 0 })
+const editingKbCategoryId = ref<number | null>(null)
+const newKbArticle = ref({ title: '', body: '', tags: '', categoryId: null as number | null, isPublished: false })
+const editingKbArticleId = ref<number | null>(null)
+
+function startEditKbCategory(c: any) {
+  editingKbCategoryId.value = c.id
+  newKbCategory.value = { name: c.name, sortOrder: c.sortOrder ?? 0 }
+}
+function cancelEditKbCategory() {
+  editingKbCategoryId.value = null
+  newKbCategory.value = { name: '', sortOrder: 0 }
+}
+function startEditKbArticle(a: any) {
+  editingKbArticleId.value = a.id
+  newKbArticle.value = {
+    title: a.title || '',
+    body: a.body || '',
+    tags: a.tags || '',
+    categoryId: a.categoryId ?? null,
+    isPublished: !!a.isPublished,
+  }
+}
+function cancelEditKbArticle() {
+  editingKbArticleId.value = null
+  newKbArticle.value = { title: '', body: '', tags: '', categoryId: null, isPublished: false }
+}
+
+// Automation rules
+const automationRules = ref<any[]>([])
+const newAutomation = ref({
+  name: '',
+  isActive: true,
+  trigger: 'ticket_created',
+  conditionsJson: '{}',
+  actionsJson: '[{"type":"notify_telegram","params":{"eventType":"automation"}}]',
+})
+const editingAutomationId = ref<number | null>(null)
+const automationTriggers = [
+  { value: 'ticket_created', label: 'Создание заявки' },
+  { value: 'sla_80', label: 'SLA 80%' },
+  { value: 'sla_breach', label: 'SLA breach' },
+  { value: 'status_resolved', label: 'Статус «Решен»' },
+  { value: 'vip_email_domain', label: 'VIP email domain' },
+]
+function startEditAutomation(r: any) {
+  editingAutomationId.value = r.id
+  newAutomation.value = {
+    name: r.name,
+    isActive: r.isActive,
+    trigger: r.trigger,
+    conditionsJson: r.conditionsJson || '{}',
+    actionsJson: r.actionsJson || '[]',
+  }
+}
+function cancelEditAutomation() {
+  editingAutomationId.value = null
+  newAutomation.value = {
+    name: '',
+    isActive: true,
+    trigger: 'ticket_created',
+    conditionsJson: '{}',
+    actionsJson: '[{"type":"notify_telegram","params":{"eventType":"automation"}}]',
+  }
+}
 
 // Statuses
 const statuses = ref<SystemStatus[]>([])
@@ -56,6 +125,19 @@ const staffApiKeyBusy = ref(false)
 // Okdesk sync settings
 const okdeskSettings = ref({ url: '', token: '' })
 const okdeskTesting = ref(false)
+const okdeskImporting = ref(false)
+const brandSettings = ref({ logoUrl: '', accentColor: '', companyName: '' })
+const { load: reloadBranding } = useSystemBranding()
+
+// IMAP email ingest
+const imapSettings = ref({
+  enabled: false,
+  host: '',
+  port: '993',
+  user: '',
+  password: '',
+  useSsl: true,
+})
 
 const tgEventTypes = [
   { value: 'new_ticket', label: 'Новая заявка' },
@@ -63,6 +145,9 @@ const tgEventTypes = [
   { value: 'assignee_changed', label: 'Назначен ответственный' },
   { value: 'field_report_added', label: 'Выездной акт добавлен' },
   { value: 'subtask_created', label: 'Подзадача создана' },
+  { value: 'sla_80', label: 'SLA 80%' },
+  { value: 'sla_breach', label: 'SLA breach' },
+  { value: 'automation', label: 'Автоматизация' },
 ]
 const tgTargetTypes = [
   { value: 'chat', label: 'Группа/чат (указать Chat ID)', desc: '' },
@@ -120,6 +205,17 @@ async function loadGeneralSettings() {
     const settings = await api.systemSettings.getSettings()
     okdeskSettings.value.url = settings.OkdeskApiUrl || ''
     okdeskSettings.value.token = settings.OkdeskApiToken || ''
+    const enabledRaw = (settings.email_ingest_enabled || '').toLowerCase()
+    imapSettings.value.enabled = enabledRaw === 'true' || enabledRaw === '1'
+    imapSettings.value.host = settings.imap_host || ''
+    imapSettings.value.port = settings.imap_port || '993'
+    imapSettings.value.user = settings.imap_user || ''
+    imapSettings.value.password = settings.imap_password || ''
+    const sslRaw = (settings.imap_use_ssl || 'true').toLowerCase()
+    imapSettings.value.useSsl = sslRaw === '' || sslRaw === 'true' || sslRaw === '1'
+    brandSettings.value.logoUrl = settings.brand_logo_url || ''
+    brandSettings.value.accentColor = settings.brand_accent_color || ''
+    brandSettings.value.companyName = settings.company_name || ''
   } catch {
     // ignore
   }
@@ -128,18 +224,24 @@ async function loadGeneralSettings() {
 async function loadData() {
   loading.value = true
   try {
-    const [statusesData, slaData, tgData, deptsData, empsData] = await Promise.all([
+    const [statusesData, slaData, tgData, deptsData, empsData, kbCats, kbArts, autoRules] = await Promise.all([
       api.systemSettings.getStatuses(),
       api.systemSettings.getSla(),
       api.systemSettings.getTelegram(),
       api.departments.getAll(),
-      api.employees.getAll().catch(() => [])
+      api.employees.getAll().catch(() => []),
+      api.knowledgeBase.getCategories().catch(() => []),
+      api.knowledgeBase.getArticles().catch(() => []),
+      api.automationRules.getAll().catch(() => []),
     ])
     statuses.value = statusesData
     slaPolicies.value = slaData
     telegramSettings.value = tgData
     slaDepartments.value = deptsData
     tgEmployees.value = (empsData as any[]).map((e: any) => ({ userId: e.userId, fullName: e.fullName })).sort((a: any, b: any) => a.fullName.localeCompare(b.fullName, 'ru'))
+    kbCategories.value = kbCats as any[]
+    kbArticles.value = kbArts as any[]
+    automationRules.value = autoRules as any[]
     if (auth.isSuperAdmin) {
       try {
         staffApiKeyStatus.value = await api.systemSettings.getStaffApiKeyStatus()
@@ -155,6 +257,23 @@ async function loadData() {
   }
 }
 
+async function saveBrandSettings() {
+  saving.value = true
+  try {
+    await api.systemSettings.saveSettings({
+      brand_logo_url: brandSettings.value.logoUrl.trim(),
+      brand_accent_color: brandSettings.value.accentColor.trim(),
+      company_name: brandSettings.value.companyName.trim(),
+    })
+    await reloadBranding(true)
+    toast.success('Брендинг сохранён')
+  } catch (e: any) {
+    toast.error(e?.message || 'Ошибка сохранения')
+  } finally {
+    saving.value = false
+  }
+}
+
 async function saveOkdeskSettings() {
   saving.value = true
   try {
@@ -167,6 +286,41 @@ async function saveOkdeskSettings() {
     toast.error(e?.message || 'Ошибка сохранения')
   } finally {
     saving.value = false
+  }
+}
+
+async function saveImapSettings() {
+  saving.value = true
+  try {
+    await api.systemSettings.saveSettings({
+      email_ingest_enabled: imapSettings.value.enabled ? 'true' : 'false',
+      imap_host: imapSettings.value.host.trim(),
+      imap_port: String(imapSettings.value.port || '993').trim(),
+      imap_user: imapSettings.value.user.trim(),
+      imap_password: imapSettings.value.password,
+      imap_use_ssl: imapSettings.value.useSsl ? 'true' : 'false',
+    })
+    toast.success('Настройки IMAP сохранены')
+  } catch (e: any) {
+    toast.error(e?.message || 'Ошибка сохранения')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function runOkdeskImport() {
+  if (!confirm('Импортировать компании и открытые заявки из Okdesk?')) return
+  okdeskImporting.value = true
+  try {
+    const r = await api.systemSettings.importOkdesk()
+    const warn = r.warning ? ` (${r.warning})` : ''
+    toast.success(
+      `Okdesk: компаний ${r.companiesUpserted}/${r.companiesFetched}, заявок ${r.issuesUpserted}/${r.issuesFetched}${warn}`,
+    )
+  } catch (e: any) {
+    toast.error(e?.message || 'Ошибка импорта Okdesk')
+  } finally {
+    okdeskImporting.value = false
   }
 }
 
@@ -310,15 +464,117 @@ async function deleteTelegram(id: number) {
   } catch { toast.error('Не удалось удалить Telegram-правило') }
 }
 
+// ---- Knowledge Base
+async function saveKbCategory() {
+  if (!newKbCategory.value.name.trim()) { toast.warning('Укажите название категории'); return }
+  saving.value = true
+  try {
+    await api.knowledgeBase.saveCategory({
+      id: editingKbCategoryId.value || undefined,
+      name: newKbCategory.value.name.trim(),
+      sortOrder: newKbCategory.value.sortOrder,
+    })
+    toast.success(editingKbCategoryId.value ? 'Категория обновлена' : 'Категория создана')
+    cancelEditKbCategory()
+    await loadData()
+  } catch { toast.error('Ошибка сохранения категории') }
+  finally { saving.value = false }
+}
+async function deleteKbCategory(id: number) {
+  if (!confirm('Удалить категорию?')) return
+  try {
+    await api.knowledgeBase.deleteCategory(id)
+    toast.success('Категория удалена')
+    await loadData()
+  } catch { toast.error('Не удалось удалить категорию') }
+}
+async function saveKbArticle() {
+  if (!newKbArticle.value.title.trim()) { toast.warning('Укажите заголовок'); return }
+  saving.value = true
+  try {
+    await api.knowledgeBase.saveArticle({
+      id: editingKbArticleId.value || undefined,
+      ...newKbArticle.value,
+      title: newKbArticle.value.title.trim(),
+    })
+    toast.success(editingKbArticleId.value ? 'Статья обновлена' : 'Статья создана')
+    cancelEditKbArticle()
+    await loadData()
+  } catch { toast.error('Ошибка сохранения статьи') }
+  finally { saving.value = false }
+}
+async function deleteKbArticle(id: number) {
+  if (!confirm('Удалить статью?')) return
+  try {
+    await api.knowledgeBase.deleteArticle(id)
+    toast.success('Статья удалена')
+    await loadData()
+  } catch { toast.error('Не удалось удалить статью') }
+}
+
+// ---- Automation
+async function saveAutomation() {
+  if (!newAutomation.value.name.trim()) { toast.warning('Укажите название правила'); return }
+  saving.value = true
+  try {
+    await api.automationRules.save({
+      id: editingAutomationId.value || undefined,
+      ...newAutomation.value,
+      name: newAutomation.value.name.trim(),
+    })
+    toast.success(editingAutomationId.value ? 'Правило обновлено' : 'Правило создано')
+    cancelEditAutomation()
+    await loadData()
+  } catch { toast.error('Ошибка сохранения правила') }
+  finally { saving.value = false }
+}
+async function deleteAutomation(id: number) {
+  if (!confirm('Удалить правило автоматизации?')) return
+  try {
+    await api.automationRules.delete(id)
+    toast.success('Правило удалено')
+    await loadData()
+  } catch { toast.error('Не удалось удалить правило') }
+}
+
 const colorOptions = [
   { value: 'bg-gray-100 text-gray-700 border-gray-200', label: 'Серый' },
   { value: 'bg-blue-100 text-blue-700 border-blue-200', label: 'Синий' },
-  { value: 'bg-green-100 text-green-700 border-green-200', label: 'Зеленый' },
-  { value: 'bg-yellow-100 text-yellow-700 border-yellow-200', label: 'Желтый' },
+  { value: 'bg-sky-100 text-sky-800 border-sky-300', label: 'Голубой' },
+  { value: 'bg-green-100 text-green-700 border-green-200', label: 'Зелёный' },
+  { value: 'bg-yellow-100 text-yellow-700 border-yellow-200', label: 'Жёлтый' },
+  { value: 'bg-orange-100 text-orange-800 border-orange-300', label: 'Оранжевый' },
   { value: 'bg-red-100 text-red-700 border-red-200', label: 'Красный' },
   { value: 'bg-purple-100 text-purple-700 border-purple-200', label: 'Фиолетовый' },
+  { value: 'bg-violet-100 text-violet-800 border-violet-300', label: 'Фиолетовый' },
   { value: 'bg-indigo-100 text-indigo-700 border-indigo-200', label: 'Индиго' },
 ]
+
+function statusColorLabel(colorClass: string): string {
+  const exact = colorOptions.find((c) => c.value === colorClass)
+  if (exact) return exact.label
+  const s = (colorClass || '').toLowerCase()
+  if (/violet|purple/.test(s)) return 'Фиолетовый'
+  if (/indigo/.test(s)) return 'Индиго'
+  if (/orange|amber/.test(s)) return 'Оранжевый'
+  if (/yellow/.test(s)) return 'Жёлтый'
+  if (/green|emerald/.test(s)) return 'Зелёный'
+  if (/red|rose/.test(s)) return 'Красный'
+  if (/sky|cyan|teal/.test(s)) return 'Голубой'
+  if (/blue/.test(s)) return 'Синий'
+  if (/gray|zinc|slate|neutral/.test(s)) return 'Серый'
+  return 'Свой'
+}
+
+const brandAccentPicker = computed({
+  get: () => {
+    const raw = (brandSettings.value.accentColor || '').trim()
+    return /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : '#4f46e5'
+  },
+  set: (v: string) => {
+    brandSettings.value.accentColor = v
+  },
+})
 
 onMounted(() => {
   loadData()
@@ -330,8 +586,7 @@ onMounted(() => {
     <!-- Header -->
     <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold tracking-tight text-gray-900">Настройки системы</h1>
-        <p class="text-sm text-gray-500 mt-1">Определяйте статусы, политики SLA и уведомления</p>
+        <p class="text-sm text-gray-500">Определяйте статусы, политики SLA и уведомления</p>
       </div>
       <button 
         @click="loadData"
@@ -344,19 +599,26 @@ onMounted(() => {
     </div>
 
     <!-- Tabs -->
-    <div class="flex items-center gap-4 border-b border-gray-200 px-2 sm:px-0">
+    <div class="flex items-center gap-2 sm:gap-4 border-b border-gray-200 px-2 sm:px-0 overflow-x-auto">
       <button
-        v-for="tab in ['statuses', 'sla', 'telegram', 'general']"
+        v-for="tab in ['statuses', 'sla', 'telegram', 'kb', 'automation', 'general']"
         :key="tab"
         @click="activeTab = tab as any"
         :class="[
-          'px-4 py-3 text-sm font-medium border-b-2 transition-colors capitalize',
+          'px-3 sm:px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
           activeTab === tab
             ? 'border-indigo-600 text-indigo-600' 
             : 'border-transparent text-gray-500 hover:text-gray-900 hover:border-gray-300'
         ]"
       >
-        {{ tab === 'statuses' ? 'Статусы заявок' : tab === 'sla' ? 'SLA Политики' : tab === 'telegram' ? 'Telegram Уведомления' : 'Общие' }}
+        {{
+          tab === 'statuses' ? 'Статусы заявок'
+          : tab === 'sla' ? 'SLA Политики'
+          : tab === 'telegram' ? 'Telegram'
+          : tab === 'kb' ? 'База знаний'
+          : tab === 'automation' ? 'Автоматизация'
+          : 'Общие'
+        }}
       </button>
     </div>
 
@@ -421,7 +683,7 @@ onMounted(() => {
                <td class="px-5 py-3 font-medium text-gray-900">{{ status.name }} <span v-if="status.isDefault" class="text-[10px] ml-2 text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full uppercase tracking-wider font-bold">Default</span></td>
                <td class="px-5 py-3">
                  <span :class="['px-2.5 py-0.5 rounded-md text-xs font-medium border flex w-max', status.colorClass]">
-                   {{ colorOptions.find(c => c.value === status.colorClass)?.label || 'Custom' }}
+                   {{ statusColorLabel(status.colorClass) }}
                  </span>
                </td>
                <td class="px-5 py-3 text-gray-500">{{ status.sortOrder }}</td>
@@ -444,7 +706,7 @@ onMounted(() => {
     <div v-if="activeTab === 'sla'" class="space-y-6">
       
       <!-- New SLA Info -->
-       <div class="bg-indigo-50 border border-indigo-100 rounded-lg p-4 text-sm text-indigo-800">
+       <div class="rounded-lg p-4 text-sm border bg-indigo-50 border-indigo-100 text-indigo-800 dark:bg-indigo-950/40 dark:border-indigo-800/60 dark:text-indigo-100">
          <p><strong>Политики SLA (Service Level Agreement)</strong> определяют нормативы времени (реакция и решение) для заявок. Вы можете использовать `*` (звездочку) в качестве маски для любых значений. Система выбирает наиболее специфичное правило при расчетах.</p>
        </div>
 
@@ -538,8 +800,13 @@ onMounted(() => {
     <!-- Telegram Tab -->
     <div v-if="activeTab === 'telegram'" class="space-y-6">
        
-       <div class="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800">
-         <p>Настройки уведомлений Telegram. Добавьте бота в нужную группу или чат. Шаблон сообщения собирается из плейсхолдеров <code class="bg-blue-100 px-1 rounded">{key}</code> — строки с нераспознанными плейсхолдерами автоматически удаляются.</p>
+       <div class="rounded-lg p-4 text-sm border bg-sky-50 border-sky-200 text-sky-900 dark:bg-sky-950/40 dark:border-sky-800/60 dark:text-sky-100">
+         <p>
+           Настройки уведомлений Telegram. Добавьте бота в нужную группу или чат.
+           Шаблон собирается из плейсхолдеров
+           <code class="rounded px-1 bg-sky-100/80 dark:bg-sky-900/80">{key}</code>
+           — строки с нераспознанными плейсхолдерами удаляются.
+         </p>
        </div>
 
        <!-- New / Edit Form -->
@@ -654,6 +921,62 @@ onMounted(() => {
         class="bg-white border text-sm border-gray-200 shadow-sm rounded-lg overflow-hidden"
       >
         <div class="px-5 py-4 border-b border-gray-200 bg-gray-50/50">
+          <h3 class="font-bold text-gray-900">Брендинг</h3>
+          <p class="text-xs text-gray-500 mt-1">
+            Логотип и акцентный цвет применяются в боковой панели и полевом интерфейсе.
+          </p>
+        </div>
+        <div class="p-5 space-y-4">
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Название компании</label>
+            <input
+              v-model="brandSettings.companyName"
+              type="text"
+              class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              placeholder="Ticket System"
+            />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">URL логотипа</label>
+            <input
+              v-model="brandSettings.logoUrl"
+              type="url"
+              class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              placeholder="https://…"
+            />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Акцентный цвет</label>
+            <div class="flex items-center gap-3">
+              <input
+                v-model="brandAccentPicker"
+                type="color"
+                class="h-9 w-12 border border-gray-300 rounded cursor-pointer"
+              />
+              <input
+                v-model="brandSettings.accentColor"
+                type="text"
+                class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
+                placeholder="#4f46e5"
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            class="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            :disabled="saving"
+            @click="saveBrandSettings"
+          >
+            Сохранить брендинг
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="auth.isSuperAdmin"
+        class="bg-white border text-sm border-gray-200 shadow-sm rounded-lg overflow-hidden"
+      >
+        <div class="px-5 py-4 border-b border-gray-200 bg-gray-50/50">
           <h3 class="font-bold text-gray-900">API-ключ для интеграций</h3>
           <p class="text-xs text-gray-500 mt-1">
             Долгоживущий ключ вместо JWT: скрипты миграции (Okdesk), автоматизация. Права такие же, как у выбранного
@@ -704,12 +1027,12 @@ onMounted(() => {
           </div>
           <div
             v-if="staffApiKeyGenerated"
-            class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs"
+            class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-800/50 dark:bg-amber-950/40"
           >
-            <p class="font-semibold text-amber-900 mb-1">Сохраните ключ сейчас (больше не покажем):</p>
-            <code class="block break-all font-mono text-gray-800 select-all">{{ staffApiKeyGenerated }}</code>
-            <p class="text-gray-600 mt-2">В <code class="bg-white px-1 rounded">src/migration/.env</code>:
-              <code class="bg-white px-1 rounded">TS_API_KEY=...</code>
+            <p class="font-semibold text-amber-900 dark:text-amber-100 mb-1">Сохраните ключ сейчас (больше не покажем):</p>
+            <code class="block break-all font-mono text-gray-800 dark:text-gray-200 select-all">{{ staffApiKeyGenerated }}</code>
+            <p class="text-gray-600 dark:text-gray-400 mt-2">В <code class="bg-white dark:bg-zinc-800 px-1 rounded">src/migration/.env</code>:
+              <code class="bg-white dark:bg-zinc-800 px-1 rounded">TS_API_KEY=...</code>
             </p>
           </div>
         </div>
@@ -766,8 +1089,215 @@ onMounted(() => {
               </span>
               <span v-else>Проверить подключение</span>
             </button>
+            <button
+              v-if="auth.isSuperAdmin"
+              type="button"
+              class="px-4 py-2 rounded-md border border-indigo-300 text-indigo-700 text-sm hover:bg-indigo-50 disabled:opacity-50"
+              :disabled="okdeskImporting || !okdeskSettings.url || !okdeskSettings.token"
+              @click="runOkdeskImport"
+            >
+              <span v-if="okdeskImporting" class="inline-flex items-center gap-2">
+                <RefreshCw :size="14" class="animate-spin" /> Импорт…
+              </span>
+              <span v-else>Импорт из Okdesk</span>
+            </button>
           </div>
         </div>
+      </div>
+
+      <div
+        v-if="auth.isSuperAdmin"
+        class="bg-white border text-sm border-gray-200 shadow-sm rounded-lg overflow-hidden"
+      >
+        <div class="px-5 py-4 border-b border-gray-200 bg-gray-50/50">
+          <h3 class="font-bold text-gray-900">Email — IMAP ingest</h3>
+          <p class="text-xs text-gray-500 mt-1">
+            Фоновый опрос ящика каждые 60 сек: непрочитанные письма создают заявки (тип Email, отдел «Поддержка»)
+            или добавляют комментарий к существующей по In-Reply-To.
+          </p>
+        </div>
+        <div class="p-5 space-y-4">
+          <label class="flex items-center gap-2 text-sm text-gray-700">
+            <input v-model="imapSettings.enabled" type="checkbox" class="rounded border-gray-300" />
+            Включить email ingest
+          </label>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">IMAP host</label>
+              <input
+                v-model="imapSettings.host"
+                type="text"
+                placeholder="imap.example.com"
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">Port</label>
+              <input
+                v-model="imapSettings.port"
+                type="text"
+                placeholder="993"
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">User</label>
+              <input
+                v-model="imapSettings.user"
+                type="text"
+                autocomplete="off"
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">Password</label>
+              <input
+                v-model="imapSettings.password"
+                type="password"
+                autocomplete="new-password"
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-gray-700">
+            <input v-model="imapSettings.useSsl" type="checkbox" class="rounded border-gray-300" />
+            Использовать SSL/TLS
+          </label>
+          <button
+            type="button"
+            class="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            :disabled="saving"
+            @click="saveImapSettings"
+          >
+            Сохранить IMAP
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Knowledge Base Tab -->
+    <div v-if="activeTab === 'kb'" class="space-y-6">
+      <div class="bg-white border text-sm border-gray-200 shadow-sm rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-200 bg-gray-50/50 flex items-center justify-between">
+          <h3 class="font-bold text-gray-900">{{ editingKbCategoryId ? 'Редактирование категории' : 'Категория' }}</h3>
+          <button v-if="editingKbCategoryId" @click="cancelEditKbCategory" class="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1"><X :size="14" /> Отмена</button>
+        </div>
+        <div class="p-5 flex flex-wrap gap-3 items-end">
+          <div class="flex-1 min-w-[12rem]">
+            <label class="block text-xs font-medium text-gray-700 mb-1">Название</label>
+            <input v-model="newKbCategory.name" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" placeholder="Напр. Сеть" />
+          </div>
+          <div class="w-28">
+            <label class="block text-xs font-medium text-gray-700 mb-1">Порядок</label>
+            <input v-model.number="newKbCategory.sortOrder" type="number" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+          </div>
+          <button type="button" class="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" :disabled="saving" @click="saveKbCategory">
+            {{ editingKbCategoryId ? 'Сохранить' : 'Добавить' }}
+          </button>
+        </div>
+        <ul class="divide-y divide-gray-100 border-t border-gray-100">
+          <li v-for="c in kbCategories" :key="c.id" class="px-5 py-3 flex items-center justify-between gap-3">
+            <span class="font-medium text-gray-900">{{ c.name }} <span class="text-xs text-gray-400">#{{ c.sortOrder }}</span></span>
+            <div class="flex gap-2">
+              <button type="button" class="text-xs text-indigo-600 hover:underline" @click="startEditKbCategory(c)">Изменить</button>
+              <button type="button" class="text-xs text-red-600 hover:underline" @click="deleteKbCategory(c.id)">Удалить</button>
+            </div>
+          </li>
+          <li v-if="!kbCategories.length" class="px-5 py-4 text-gray-500 text-sm">Категорий пока нет</li>
+        </ul>
+      </div>
+
+      <div class="bg-white border text-sm border-gray-200 shadow-sm rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-200 bg-gray-50/50 flex items-center justify-between">
+          <h3 class="font-bold text-gray-900">{{ editingKbArticleId ? 'Редактирование статьи' : 'Статья' }}</h3>
+          <button v-if="editingKbArticleId" @click="cancelEditKbArticle" class="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1"><X :size="14" /> Отмена</button>
+        </div>
+        <div class="p-5 space-y-3">
+          <input v-model="newKbArticle.title" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" placeholder="Заголовок" />
+          <textarea v-model="newKbArticle.body" rows="4" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" placeholder="Текст статьи" />
+          <div class="flex flex-wrap gap-3">
+            <input v-model="newKbArticle.tags" class="flex-1 min-w-[10rem] border border-gray-300 rounded-md px-3 py-2 text-sm" placeholder="Теги через запятую" />
+            <select v-model="newKbArticle.categoryId" class="border border-gray-300 rounded-md px-3 py-2 text-sm">
+              <option :value="null">Без категории</option>
+              <option v-for="c in kbCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+            <label class="flex items-center gap-2 text-sm text-gray-700">
+              <input v-model="newKbArticle.isPublished" type="checkbox" class="rounded border-gray-300" />
+              Опубликовано
+            </label>
+            <button type="button" class="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" :disabled="saving" @click="saveKbArticle">
+              {{ editingKbArticleId ? 'Сохранить' : 'Добавить' }}
+            </button>
+          </div>
+        </div>
+        <ul class="divide-y divide-gray-100 border-t border-gray-100">
+          <li v-for="a in kbArticles" :key="a.id" class="px-5 py-3 flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="font-medium text-gray-900">{{ a.title }}
+                <span v-if="a.isPublished" class="ml-2 text-[10px] uppercase tracking-wide text-green-700 bg-green-50 px-1.5 py-0.5 rounded">pub</span>
+                <span v-else class="ml-2 text-[10px] uppercase tracking-wide text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">draft</span>
+              </div>
+              <div class="text-xs text-gray-500 truncate">{{ a.tags || '—' }} · {{ a.categoryName || 'без категории' }}</div>
+            </div>
+            <div class="flex gap-2 shrink-0">
+              <button type="button" class="text-xs text-indigo-600 hover:underline" @click="startEditKbArticle(a)">Изменить</button>
+              <button type="button" class="text-xs text-red-600 hover:underline" @click="deleteKbArticle(a.id)">Удалить</button>
+            </div>
+          </li>
+          <li v-if="!kbArticles.length" class="px-5 py-4 text-gray-500 text-sm">Статей пока нет</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Automation Tab -->
+    <div v-if="activeTab === 'automation'" class="space-y-6">
+      <div class="bg-white border text-sm border-gray-200 shadow-sm rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-200 bg-gray-50/50 flex items-center justify-between">
+          <h3 class="font-bold text-gray-900">{{ editingAutomationId ? 'Редактирование правила' : 'Правило автоматизации' }}</h3>
+          <button v-if="editingAutomationId" @click="cancelEditAutomation" class="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1"><X :size="14" /> Отмена</button>
+        </div>
+        <div class="p-5 space-y-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input v-model="newAutomation.name" class="border border-gray-300 rounded-md px-3 py-2 text-sm" placeholder="Название" />
+            <select v-model="newAutomation.trigger" class="border border-gray-300 rounded-md px-3 py-2 text-sm">
+              <option v-for="t in automationTriggers" :key="t.value" :value="t.value">{{ t.label }}</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-gray-700">
+            <input v-model="newAutomation.isActive" type="checkbox" class="rounded border-gray-300" />
+            Активно
+          </label>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Conditions JSON</label>
+            <textarea v-model="newAutomation.conditionsJson" rows="2" class="w-full font-mono text-xs border border-gray-300 rounded-md px-3 py-2" placeholder='{"emailDomain":"vip.com"}' />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Actions JSON</label>
+            <textarea v-model="newAutomation.actionsJson" rows="3" class="w-full font-mono text-xs border border-gray-300 rounded-md px-3 py-2" placeholder='[{"type":"escalate_priority"}]' />
+            <p class="text-[11px] text-gray-500 mt-1">
+              Типы: assign_department, escalate_priority, set_priority, tag_title, notify_telegram, auto_close, set_setting
+            </p>
+          </div>
+          <button type="button" class="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" :disabled="saving" @click="saveAutomation">
+            {{ editingAutomationId ? 'Сохранить' : 'Добавить' }}
+          </button>
+        </div>
+        <ul class="divide-y divide-gray-100 border-t border-gray-100">
+          <li v-for="r in automationRules" :key="r.id" class="px-5 py-3 flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="font-medium text-gray-900">{{ r.name }}
+                <span v-if="r.isActive" class="ml-2 text-[10px] uppercase text-green-700 bg-green-50 px-1.5 py-0.5 rounded">on</span>
+                <span v-else class="ml-2 text-[10px] uppercase text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">off</span>
+              </div>
+              <div class="text-xs text-gray-500">{{ automationTriggers.find(t => t.value === r.trigger)?.label || r.trigger }}</div>
+            </div>
+            <div class="flex gap-2 shrink-0">
+              <button type="button" class="text-xs text-indigo-600 hover:underline" @click="startEditAutomation(r)">Изменить</button>
+              <button type="button" class="text-xs text-red-600 hover:underline" @click="deleteAutomation(r.id)">Удалить</button>
+            </div>
+          </li>
+          <li v-if="!automationRules.length" class="px-5 py-4 text-gray-500 text-sm">Правил пока нет</li>
+        </ul>
       </div>
     </div>
   </div>

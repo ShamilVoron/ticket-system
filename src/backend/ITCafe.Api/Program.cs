@@ -11,6 +11,7 @@ using ITCafe.Api.Hubs;
 using ITCafe.Api.Middleware;
 using ITCafe.Api.Services;
 using ITCafe.Api.Services.Contracts;
+using ITCafe.Api.Services.Hosted;
 using ITCafe.Api.Services.Implementations;
 using ITCafe.Api.SignalR;
 using FluentValidation.AspNetCore;
@@ -74,37 +75,55 @@ public partial class Program
             });
             builder.Services.AddSingleton<TicketRealtimeBroadcaster>();
 
-            // 4. Messaging (MassTransit + RabbitMQ)
+            // 4. Messaging (MassTransit + RabbitMQ) — optional so startup does not hang without Rabbit
+            var rabbitEnabled = builder.Configuration.GetValue("RabbitMQ:Enabled", true);
             builder.Services.AddMassTransit(x =>
             {
-                x.UsingRabbitMq((context, cfg) =>
+                if (rabbitEnabled)
                 {
-                    var rabbitHost = builder.Configuration.GetValue<string>("RabbitMQ:Host") ?? "localhost";
-                    var rabbitPort = builder.Configuration.GetValue<int?>("RabbitMQ:Port") ?? 5672;
-                    var rabbitUsername = builder.Configuration.GetValue<string>("RabbitMQ:Username")
-                        ?? Environment.GetEnvironmentVariable("RABBITMQ_USERNAME")
-                        ?? "guest";
-                    var rabbitPassword = builder.Configuration.GetValue<string>("RabbitMQ:Password")
-                        ?? Environment.GetEnvironmentVariable("RABBITMQ_PASSWORD")
-                        ?? "guest";
-                    var rabbitUri = new Uri($"rabbitmq://{rabbitHost}:{rabbitPort}/");
-                    cfg.Host(rabbitUri, h =>
+                    x.UsingRabbitMq((context, cfg) =>
                     {
-                        h.Username(rabbitUsername);
-                        h.Password(rabbitPassword);
+                        var rabbitHost = builder.Configuration.GetValue<string>("RabbitMQ:Host") ?? "localhost";
+                        var rabbitPort = builder.Configuration.GetValue<int?>("RabbitMQ:Port") ?? 5672;
+                        var rabbitUsername = builder.Configuration.GetValue<string>("RabbitMQ:Username")
+                            ?? Environment.GetEnvironmentVariable("RABBITMQ_USERNAME")
+                            ?? "guest";
+                        var rabbitPassword = builder.Configuration.GetValue<string>("RabbitMQ:Password")
+                            ?? Environment.GetEnvironmentVariable("RABBITMQ_PASSWORD")
+                            ?? "guest";
+                        var rabbitUri = new Uri($"rabbitmq://{rabbitHost}:{rabbitPort}/");
+                        cfg.Host(rabbitUri, h =>
+                        {
+                            h.Username(rabbitUsername);
+                            h.Password(rabbitPassword);
+                        });
                     });
-                });
+                }
+                else
+                {
+                    x.UsingInMemory((context, cfg) =>
+                    {
+                        cfg.ConfigureEndpoints(context);
+                    });
+                }
             });
 
             // 5. Services
             builder.Services.AddHttpContextAccessor();
+            builder.Services.AddSingleton<ITenantProvider, SingleTenantProvider>();
             builder.Services.AddScoped<IAuthService, AuthService>();
             builder.Services.AddScoped<ITicketService, TicketService>();
+            builder.Services.AddScoped<ITicketAssistService, TicketAssistService>();
             builder.Services.AddScoped<IEmployeeService, EmployeeService>();
             builder.Services.AddScoped<ISlaService, SlaService>();
             builder.Services.AddScoped<ITelegramNotificationService, TelegramNotificationService>();
             builder.Services.AddScoped<IOkdeskSyncService, OkdeskSyncService>();
             builder.Services.AddScoped<IMessengerService, MessengerService>();
+            builder.Services.AddScoped<IEmailIngestService, EmailIngestService>();
+            builder.Services.AddScoped<IAutomationEngineService, AutomationEngineService>();
+            builder.Services.AddHostedService<EmailIngestHostedService>();
+            builder.Services.AddHostedService<AutomationHostedService>();
+            builder.Services.AddHostedService<SlaMonitorHostedService>();
             builder.Services.AddSingleton<ChatRealtimeBroadcaster>();
             builder.Services.AddSingleton<IUserIdProvider, SubUserIdProvider>();
             builder.Services.AddHttpClient();
@@ -130,19 +149,22 @@ public partial class Program
             });
 
             // 8. Health Checks
-            builder.Services.AddHealthChecks()
-                .AddDbContextCheck<AppDbContext>("postgresql")
-                .AddCheck<RabbitMqHealthCheck>("rabbitmq");
+            var healthChecks = builder.Services.AddHealthChecks()
+                .AddDbContextCheck<AppDbContext>("postgresql");
+            if (rabbitEnabled)
+                healthChecks.AddCheck<RabbitMqHealthCheck>("rabbitmq");
 
             // 9. Rate Limiting
             builder.Services.AddRateLimiter(options =>
             {
+                var isDev = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Test");
                 options.AddFixedWindowLimiter("fixed", opt =>
                 {
-                    opt.PermitLimit = 120;
+                    // SPA при навигации даёт пачку запросов на страницу; в dev/test лимит выше, чтобы не ловить 429.
+                    opt.PermitLimit = isDev ? 2000 : 180;
                     opt.Window = TimeSpan.FromMinutes(1);
                     opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-                    opt.QueueLimit = 10;
+                    opt.QueueLimit = isDev ? 50 : 20;
                 });
 
                 // Жёстче лимит на запись в мессенджер (на пользователя): спам / скомпрометированный токен.
@@ -157,7 +179,7 @@ public partial class Program
                         _ => new FixedWindowRateLimiterOptions
                         {
                             AutoReplenishment = true,
-                            PermitLimit = 45,
+                            PermitLimit = isDev ? 200 : 45,
                             Window = TimeSpan.FromMinutes(1),
                             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                             QueueLimit = 0,

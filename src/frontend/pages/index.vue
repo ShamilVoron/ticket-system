@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Search, RefreshCw, Ticket, ArrowUp, ArrowDown, Users, Building2, X, Eraser } from 'lucide-vue-next'
+import { isTicketSignalRConnected } from '~/composables/useTicketSignalR'
 import type { Ticket as TicketType, SystemStatus } from '~/types'
 
 const api = useApi()
@@ -274,6 +275,16 @@ function clearAllFilters() {
 // Server-side filtering / sorting — local computed is just a pass-through
 const filteredTickets = computed(() => tickets.value)
 
+const hasActiveFilters = computed(() =>
+  !!(
+    searchQuery.value ||
+    (filterStatus.value?.length || 0) > 0 ||
+    (filterDepartments.value?.length || 0) > 0 ||
+    (filterAssignees.value?.length || 0) > 0 ||
+    (filterClientNames.value?.length || 0) > 0
+  ),
+)
+
 // Pagination (25 per page)
 const perPage = 25
 const page = ref(1)
@@ -350,7 +361,10 @@ useTicketSignalR(() => {
 onMounted(() => {
   loadData()
   void loadFilterRefs()
-  pollInterval = setInterval(weakRefresh, 30000)
+  // Fallback poll only when SignalR is down; keep interval long to reduce load
+  pollInterval = setInterval(() => {
+    if (!isTicketSignalRConnected()) weakRefresh()
+  }, 120000)
 })
 
 onUnmounted(() => {
@@ -369,7 +383,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Filters -->
-    <div class="bg-white p-3 sm:p-4 rounded-lg shadow-sm border border-gray-200 space-y-3 sm:space-y-0 sm:flex sm:flex-wrap sm:gap-3 lg:flex-nowrap">
+    <FilterBar>
       <div class="flex-1 relative min-w-0">
         <Search class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" :size="16" />
         <input
@@ -489,7 +503,7 @@ onUnmounted(() => {
           <span class="whitespace-nowrap hidden sm:inline">Сбросить</span>
         </button>
       </div>
-    </div>
+    </FilterBar>
 
     <!-- Stats Cards (today) -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -512,24 +526,20 @@ onUnmounted(() => {
     </div>
 
     <!-- Skeleton Loading -->
-    <div v-if="loading && tickets.length === 0" class="space-y-3">
-      <div v-for="i in 6" :key="i" class="bg-white rounded-lg border border-gray-200 p-4 animate-pulse">
-        <div class="flex items-start gap-3">
-          <div class="w-12 h-4 bg-gray-200 rounded"></div>
-          <div class="flex-1 space-y-2">
-            <div class="h-4 bg-gray-200 rounded w-3/4"></div>
-            <div class="h-3 bg-gray-100 rounded w-1/2"></div>
-          </div>
-          <div class="w-16 h-5 bg-gray-200 rounded-full"></div>
-        </div>
-      </div>
-    </div>
+    <LoadingSkeleton v-if="loading && tickets.length === 0" :rows="6" />
 
     <!-- Empty State -->
-    <div v-else-if="filteredTickets.length === 0" class="bg-white rounded-lg shadow-sm border border-gray-200 text-center py-16">
-      <Ticket :size="48" class="mx-auto mb-3 text-gray-300" />
-      <p class="text-gray-900 font-medium">Заявок не найдено</p>
-      <p class="text-sm text-gray-500 mt-1">Попробуйте изменить параметры поиска или фильтры</p>
+    <div v-else-if="filteredTickets.length === 0" class="bg-white rounded-lg shadow-sm border border-gray-200">
+      <EmptyState
+        :title="hasActiveFilters ? 'Заявок не найдено' : 'Пока нет заявок'"
+        :description="hasActiveFilters
+          ? 'Попробуйте изменить параметры поиска или фильтры'
+          : 'Создайте первую заявку или дождитесь новых обращений'"
+      >
+        <template #icon>
+          <Ticket :size="28" class="text-gray-300" />
+        </template>
+      </EmptyState>
     </div>
 
     <template v-else>
@@ -566,9 +576,11 @@ onUnmounted(() => {
             <div class="flex items-center gap-2 min-w-0">
               <span class="text-xs font-mono text-gray-400 shrink-0">#{{ t.id }}</span>
               <span v-if="t.isRepair" class="text-indigo-500 shrink-0" title="Ремонт">🔧</span>
-              <span :class="['inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border shrink-0', getStatusColor(t.status)]">
-                {{ t.status }}
-              </span>
+              <TicketStatusBadge
+                :status="t.status"
+                :color-class="getStatusColor(t.status)"
+                class="!rounded text-[10px] font-semibold shrink-0"
+              />
             </div>
             <span :class="['inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border shrink-0', getPriorityBadgeClass(t.priority)]">
               {{ t.priority }}
@@ -675,9 +687,11 @@ onUnmounted(() => {
                   {{ t.clientName || '—' }}
                 </td>
                 <td class="px-4 py-3 whitespace-nowrap">
-                  <span :class="['inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border', getStatusColor(t.status)]">
-                    {{ t.status }}
-                  </span>
+                  <TicketStatusBadge
+                    :status="t.status"
+                    :color-class="getStatusColor(t.status)"
+                    class="!rounded text-xs font-medium"
+                  />
                 </td>
                 <td class="px-4 py-3 whitespace-nowrap">
                   <span :class="['inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border', getPriorityBadgeClass(t.priority)]">

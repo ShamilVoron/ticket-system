@@ -35,8 +35,8 @@ public class TicketsIntegrationTests : IAsyncLifetime
     private async Task SeedAuthenticatedUser()
     {
         // Register всегда создаёт client; для проверок от имени сотрудника кладём coordinator в БД явно.
-        const string email = "tickets@example.com";
-        const string userId = "tickets-test-staff";
+        var email = $"tickets-{Guid.NewGuid():N}@example.com";
+        var userId = $"tickets-test-staff-{Guid.NewGuid():N}";
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -55,7 +55,7 @@ public class TicketsIntegrationTests : IAsyncLifetime
                     UserId = userId,
                     FullName = "Test User",
                     Role = "Координатор",
-                    Login = "tickets",
+                    Login = $"tickets-{Guid.NewGuid():N}"[..20],
                     Email = email,
                     AvatarUrl = string.Empty,
                     WorkSchedule = string.Empty,
@@ -187,15 +187,15 @@ public class TicketsIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task AddComment_AsSuperAdmin_ShouldBumpOpenToInProgress()
     {
-        const string saEmail = "superadmin-status-test@example.com";
         const string saPassword = "Password123!";
+        var saEmail = $"superadmin-status-{Guid.NewGuid():N}@example.com";
         using (var scope = _factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             db.Companies.Add(new Company { Name = "Company SuperAdmin Flow" });
             db.UserAccounts.Add(new UserAccount
             {
-                UserId = "superadmin-flow-uid",
+                UserId = $"superadmin-flow-{Guid.NewGuid():N}",
                 Email = saEmail,
                 FullName = "Андрей",
                 Password = BCrypt.Net.BCrypt.HashPassword(saPassword),

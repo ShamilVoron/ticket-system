@@ -56,6 +56,17 @@ public class TelegramNotificationService : ITelegramNotificationService
         await NotifyAsync("assignee_changed", ticket, extra: extra);
     }
 
+    public async Task NotifyEventAsync(Ticket ticket, string eventType, Dictionary<string, string>? extra = null)
+    {
+        var merged = await ResolveTicketExtrasAsync(ticket);
+        if (extra != null)
+        {
+            foreach (var kv in extra)
+                merged[kv.Key] = kv.Value;
+        }
+        await NotifyAsync(eventType, ticket, extra: merged);
+    }
+
     public async Task<bool> TestTokenAsync(string token)
     {
         if (string.IsNullOrWhiteSpace(token)) return false;
@@ -257,6 +268,10 @@ public class TelegramNotificationService : ITelegramNotificationService
             values["assignee"] = EscapeHtmlValue(extra.GetValueOrDefault("assignee"));
             values["oldAssignee"] = EscapeHtmlValue(extra.GetValueOrDefault("oldAssignee"));
             values["createdAt"] = EscapeHtmlValue(extra.GetValueOrDefault("createdAt"));
+            if (extra.TryGetValue("message", out var messageVal))
+                values["message"] = EscapeHtmlValue(messageVal);
+            if (extra.TryGetValue("slaWindow", out var sw))
+                values["slaWindow"] = EscapeHtmlValue(sw);
         }
 
         if (report != null)

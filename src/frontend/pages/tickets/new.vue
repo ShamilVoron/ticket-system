@@ -151,6 +151,63 @@ const showBriefSection   = computed(() => isFieldEngineerDept.value)
 const showRequestType    = computed(() => !isFieldEngineerDept.value)
 const showDesiredDate    = computed(() => !isFieldEngineerDept.value)
 
+const kbSuggestions = ref<{ id: number; title: string; tags?: string }[]>([])
+const fieldSuggestApplied = ref(false)
+const suggestingFields = ref(false)
+let kbSuggestTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => form.title,
+  (title) => {
+    if (kbSuggestTimer) clearTimeout(kbSuggestTimer)
+    const q = (title || '').trim()
+    if (q.length < 4) {
+      kbSuggestions.value = []
+      return
+    }
+    kbSuggestTimer = setTimeout(async () => {
+      try {
+        kbSuggestions.value = await api.knowledgeBase.suggest(q)
+      } catch {
+        kbSuggestions.value = []
+      }
+    }, 400)
+  },
+)
+
+async function applyFieldSuggestions(force = false) {
+  const title = form.title.trim()
+  const problem = form.details.trim()
+  if (title.length < 3 && problem.length < 3) return
+  if (!force && fieldSuggestApplied.value) return
+  suggestingFields.value = true
+  try {
+    const res = await api.tickets.suggestFields({ title, problem })
+    let changed = false
+    if (res.requestType && (force || form.requestType === 'Другое')) {
+      form.requestType = res.requestType
+      changed = true
+    }
+    if (res.priority && (force || form.priority === 'Средний')) {
+      form.priority = res.priority
+      changed = true
+    }
+    if (res.department && (force || form.department === 'Координатор')) {
+      form.department = res.department
+      changed = true
+    }
+    if (changed) {
+      fieldSuggestApplied.value = true
+      toast.success('Подставлены тип / приоритет / отдел')
+    } else if (force) {
+      toast.info('По ключевым словам ничего не найдено')
+    }
+  } catch {
+    if (force) toast.error('Не удалось подобрать поля')
+  } finally {
+    suggestingFields.value = false
+  }
+}
+
 const useEngineerBrief = ref(false)
 
 // ─── Brief: constants ────────────────────────────────────────────────────────
@@ -776,13 +833,34 @@ const submit = async () => {
                 Опишите обращение — с вами свяжутся из Ticket System.
               </p>
               <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Тема заявки <span class="text-red-500">*</span></label>
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Тема заявки <span class="text-red-500">*</span></label>
+                  <button
+                    type="button"
+                    class="text-[10px] font-bold uppercase tracking-widest text-indigo-600 hover:underline disabled:opacity-50"
+                    :disabled="suggestingFields || (!form.title.trim() && !form.details.trim())"
+                    @click="applyFieldSuggestions(true)"
+                  >
+                    {{ suggestingFields ? '…' : 'Подсказать поля' }}
+                  </button>
+                </div>
                 <input
                   v-model="form.title"
                   required
                   placeholder="Кратко опишите проблему..."
                   class="w-full border border-gray-200 dark:border-zinc-600 rounded-xl px-3 py-2.5 text-sm bg-white dark:bg-[#141416] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30"
+                  @blur="applyFieldSuggestions(false)"
                 />
+                <ul v-if="kbSuggestions.length" class="mt-2 space-y-1.5">
+                  <li
+                    v-for="s in kbSuggestions"
+                    :key="s.id"
+                    class="text-xs rounded-lg border border-amber-200/80 bg-amber-50/80 dark:bg-amber-950/20 dark:border-amber-800/40 px-3 py-2 text-amber-900 dark:text-amber-100"
+                  >
+                    <span class="font-medium">{{ s.title }}</span>
+                    <span v-if="s.tags" class="text-amber-700/80 dark:text-amber-200/70"> · {{ s.tags }}</span>
+                  </li>
+                </ul>
               </div>
               <div v-if="!auth.isStaff" class="relative" @click.stop>
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Отдел заявки</label>

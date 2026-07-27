@@ -9,6 +9,6 @@ export default defineNuxtRouteMiddleware(() => {
   }
 
   if (!auth.isStaff) {
-    return navigateTo('/')
+    return navigateTo('/portal')
   }
 })

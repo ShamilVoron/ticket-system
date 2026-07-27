@@ -73,7 +73,8 @@ services:
     networks:
       - tickets-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      # aspnet image may not include curl — use the built-in HTTP client via wget or a TCP check
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -83,6 +84,9 @@ services:
     build:
       context: ../src/frontend
       dockerfile: Dockerfile
+      args:
+        # Nitro proxy target inside the compose network (baked at build time)
+        NUXT_DEV_BACKEND_URL: http://backend:5000
     container_name: tickets-frontend
     ports:
       - "3000:3000"
@@ -95,6 +99,7 @@ services:
       - tickets-net
 
 volumes:
+  # Create once: docker volume create tickets_postgres_data
   postgres_data:
     external: true
     name: tickets_postgres_data

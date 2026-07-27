@@ -129,12 +129,15 @@ onMounted(() => {
         <RefreshCw :size="32" class="animate-spin text-indigo-600" />
       </div>
 
-      <div v-else-if="filteredCompanies.length === 0" class="text-center py-24 px-6">
-        <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Building2 :size="32" class="text-gray-300" />
-        </div>
-        <h3 class="text-lg font-semibold text-gray-900 mb-1">Компании не найдены</h3>
-        <p class="text-sm text-gray-500 max-w-xs mx-auto">По вашему запросу ничего не найдено. Попробуйте изменить параметры поиска или добавить новую компанию.</p>
+      <div v-else-if="filteredCompanies.length === 0">
+        <EmptyState
+          title="Компании не найдены"
+          description="По вашему запросу ничего не найдено. Попробуйте изменить параметры поиска или добавить новую компанию."
+        >
+          <template #icon>
+            <Building2 :size="32" class="text-gray-300" />
+          </template>
+        </EmptyState>
       </div>
 
       <template v-else>

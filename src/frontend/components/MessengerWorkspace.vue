@@ -69,6 +69,20 @@ const pendingAttachment = ref<PendingAttachment | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const uploadingFile = ref(false)
 const messengerUnreadTotal = useState('messengerUnread', () => 0)
+const searchQuery = ref('')
+const searchResults = ref<
+  { messageId: string; conversationId: string; body: string; createdAtUtc: string; senderFullName: string }[]
+>([])
+const searching = ref(false)
+let searchDebounce: ReturnType<typeof setTimeout> | null = null
+
+const departmentChannels = [
+  { slug: 'support', label: '#support' },
+  { slug: 'engineers', label: '#engineers' },
+  { slug: 'repair', label: '#repair' },
+  { slug: 'coordinators', label: '#coordinators' },
+  { slug: 'developers', label: '#developers' },
+] as const
 
 let prevJoined: string | null = null
 
@@ -158,6 +172,46 @@ async function openDirect(otherUserId: string) {
   } catch (e: any) {
     toast.error(e?.data?.message || e?.message || 'Не удалось открыть диалог')
   }
+}
+
+async function openDepartmentChannel(slug: string) {
+  try {
+    const { id } = await api.messenger.ensureDepartmentChannel(slug)
+    await loadLists()
+    await selectConversation(id)
+  } catch (e: any) {
+    toast.error(e?.data?.message || e?.message || 'Не удалось открыть канал')
+  }
+}
+
+function onSearchInput() {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => {
+    void runSearch()
+  }, 300)
+}
+
+async function runSearch() {
+  const q = searchQuery.value.trim()
+  if (q.length < 2) {
+    searchResults.value = []
+    return
+  }
+  searching.value = true
+  try {
+    searchResults.value = await api.messenger.searchMessages(q)
+  } catch (e: any) {
+    searchResults.value = []
+    toast.error(e?.data?.message || e?.message || 'Ошибка поиска')
+  } finally {
+    searching.value = false
+  }
+}
+
+async function openSearchHit(conversationId: string) {
+  searchQuery.value = ''
+  searchResults.value = []
+  await selectConversation(conversationId)
 }
 
 function openGroupModal() {
@@ -488,7 +542,43 @@ onUnmounted(async () => {
         </button>
       </div>
 
+      <div class="p-2 border-b border-zinc-200/70 dark:border-zinc-800 space-y-2">
+        <input
+          v-model="searchQuery"
+          type="search"
+          placeholder="Поиск сообщений…"
+          class="w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-[#1a1a1d] text-zinc-900 dark:text-zinc-100 text-[12px] px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-indigo-500/30"
+          @input="onSearchInput"
+        />
+        <div v-if="searching" class="text-[11px] text-zinc-500 px-1">Поиск…</div>
+        <ul v-else-if="searchResults.length" class="max-h-36 overflow-y-auto space-y-0.5">
+          <li v-for="hit in searchResults" :key="hit.messageId">
+            <button
+              type="button"
+              class="w-full text-left rounded-md px-2 py-1.5 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/80"
+              @click="openSearchHit(hit.conversationId)"
+            >
+              <div class="text-[11px] font-medium text-zinc-800 dark:text-zinc-200 truncate">{{ hit.senderFullName }}</div>
+              <div class="text-[11px] text-zinc-500 truncate">{{ hit.body }}</div>
+            </button>
+          </li>
+        </ul>
+      </div>
+
       <div class="flex-1 overflow-y-auto">
+        <p class="px-3 pt-3 pb-1 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Каналы отделов</p>
+        <ul class="px-2 pb-2 space-y-0.5">
+          <li v-for="ch in departmentChannels" :key="ch.slug">
+            <button
+              type="button"
+              class="w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/80 transition-colors"
+              @click="openDepartmentChannel(ch.slug)"
+            >
+              {{ ch.label }}
+            </button>
+          </li>
+        </ul>
+
         <p class="px-3 pt-3 pb-1 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Беседы</p>
         <div v-if="loadingChats" class="px-3 py-3 text-sm text-zinc-500">Загрузка бесед…</div>
         <div

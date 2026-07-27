@@ -1,0 +1,57 @@
+[
+  {
+    "severity": "ok",
+    "area": "auth",
+    "message": "Logged in, landed on http://localhost:3000/"
+  },
+  {
+    "severity": "ok",
+    "area": "profile",
+    "message": "Шапка профиля без дубля роли: \"Super Admin ▼\""
+  },
+  {
+    "severity": "ok",
+    "area": "theme",
+    "message": "Светлый sidebar: rgb(255, 255, 255)"
+  },
+  {
+    "severity": "info",
+    "area": "theme",
+    "message": "html class after light: \"\""
+  },
+  {
+    "severity": "ok",
+    "area": "sidebar",
+    "message": "Подменю Клиенты/Оборудование свёрнуты"
+  },
+  {
+    "severity": "ok",
+    "area": "empty",
+    "message": "Пустой список без фильтров: корректный текст"
+  },
+  {
+    "severity": "info",
+    "area": "/-sidebar",
+    "message": "bg=rgb(255, 255, 255) color=rgb(31, 41, 55)"
+  },
+  {
+    "severity": "info",
+    "area": "/settings-sidebar",
+    "message": "bg=rgb(255, 255, 255) color=rgb(31, 41, 55)"
+  },
+  {
+    "severity": "ok",
+    "area": "settings",
+    "message": "Метка Custom в статусах не найдена"
+  },
+  {
+    "severity": "ok",
+    "area": "onboarding-ux",
+    "message": "Онбординг без staff-навигации"
+  },
+  {
+    "severity": "ok",
+    "area": "signalr",
+    "message": "Нет явных ошибок SignalR/WebSocket в console"
+  }
+]
